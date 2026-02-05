@@ -19,8 +19,8 @@ let package = Package(
             bundleIdentifier: "Vetrivel.WalkIn",
             displayVersion: "1.0",
             bundleVersion: "1",
-            appIcon: .placeholder(icon: .images),
-            accentColor: .presetColor(.indigo),
+            appIcon: .placeholder(icon: .paper),
+            accentColor: .presetColor(.pink),
             supportedDeviceFamilies: [
                 .pad,
                 .phone

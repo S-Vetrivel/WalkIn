@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import AVFoundation
+@preconcurrency import AVFoundation
 
 struct RecordingView: View {
     @ObservedObject var nav: NavigationManager

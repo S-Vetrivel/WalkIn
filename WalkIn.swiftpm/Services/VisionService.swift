@@ -46,45 +46,51 @@ class VisionService: NSObject, ObservableObject {
         }
     }
     
-    // 🔥 ROBUST MANUAL LOADER (Fixes "Not Found" & "Class Gen" errors)
+    // 🔥 SMART LOADER: Searches everywhere for the file
     private func setupYOLO() {
         Task.detached {
             print("🚀 STARTING YOLO SETUP...")
             
+            // 1. Try finding it in the Main Bundle
+            var foundURL = Bundle.main.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel")
+            
+            // 2. If not found, try the "Class Bundle" (This is where Playground files usually live)
+            if foundURL == nil {
+                let classBundle = Bundle(for: VisionService.self)
+                foundURL = classBundle.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel")
+            }
+            
+            // 3. If STILL not found, check inside the "Resources" subdirectory explicitly
+            if foundURL == nil {
+                foundURL = Bundle.main.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel", subdirectory: "Resources")
+            }
+            
+            guard let modelURL = foundURL else {
+                print("❌ CRITICAL ERROR: Could not find 'YOLOv3TinyInt8LUT.mlmodel' anywhere.")
+                print("👉 FIX: Make sure you created a folder named 'Resources' and put the file inside.")
+                return
+            }
+            
+            print("✅ Found Model File at: \(modelURL.path)")
+            
             do {
-                // 1. Find the raw .mlmodel file in the bundle
-                // IMPORTANT: Ensure the file name matches exactly "YOLOv3TinyInt8LUT" in your sidebar
-                guard let modelURL = Bundle.main.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel") else {
-                    print("❌ CRITICAL ERROR: Could not find 'YOLOv3TinyInt8LUT.mlmodel' in the app bundle.")
-                    print("👉 CHECK: Did you add it to 'Copy Bundle Resources' in Build Phases?")
-                    return
-                }
-                
-                print("📂 Found Model File at: \(modelURL.lastPathComponent)")
-                
-                // 2. Force compile it right now (Bypassing Xcode's build system)
                 print("🔨 Compiling Model...")
                 let compiledURL = try MLModel.compileModel(at: modelURL)
                 
-                // 3. Load the compiled model
                 print("🧠 Loading CoreML Model...")
                 let model = try MLModel(contentsOf: compiledURL)
                 let visionModel = try VNCoreMLModel(for: model)
                 
-                // 4. Create the request
                 let request = VNCoreMLRequest(model: visionModel) { [weak self] request, error in
                     self?.handleYOLO(request: request)
                 }
                 
-                // Explicit type to avoid errors
                 request.imageCropAndScaleOption = VNImageCropAndScaleOption.scaleFill
-                
-                // 5. Save to the safe variable
                 self.yoloRequest = request
-                print("✅ YOLO Model Loaded Successfully!")
+                print("🎉 YOLO MODEL FULLY LOADED & READY!")
                 
             } catch {
-                print("❌ Failed to load YOLO Model: \(error)")
+                print("❌ MODEL LOAD CRASHED: \(error)")
             }
         }
     }

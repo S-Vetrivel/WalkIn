@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import Vision
 import UIKit
+import CoreML
 
 // 1. Main Actor for UI Safety
 @MainActor
@@ -9,16 +10,22 @@ class VisionService: NSObject, ObservableObject {
     @Published var captureSession: AVCaptureSession?
     weak var navigationManager: NavigationManager?
     
-    // Safety Flags
+    // Safety Flags - nonisolated(unsafe) lets background threads touch them
     nonisolated(unsafe) private var lastProcessingTime = Date()
-    nonisolated private let processingInterval = 0.2 // Very Fast Scanning (5x per second)
+    nonisolated private let processingInterval = 0.2
+    
+    // 🔥 FIX 1: Mark this as 'nonisolated(unsafe)' to fix the Main Actor error
+    nonisolated(unsafe) private var yoloRequest: VNCoreMLRequest?
     
     func setup(with manager: NavigationManager) {
         self.navigationManager = manager
         
+        // Load the Model manually (No Xcode auto-gen needed)
+        setupYOLO()
+        
         Task.detached {
             let session = AVCaptureSession()
-            session.sessionPreset = .high // High Res for better OCR
+            session.sessionPreset = .hd1280x720
             
             guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
                   let input = try? AVCaptureDeviceInput(device: device) else { return }
@@ -37,16 +44,66 @@ class VisionService: NSObject, ObservableObject {
         }
     }
     
+    // 🔥 THE NEW MANUAL LOADER
+    private func setupYOLO() {
+        Task.detached {
+            do {
+                print("📂 Attempting to load YOLO model manually...")
+                
+                // 1. Find the raw file in the app bundle
+                guard let modelURL = Bundle.main.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel") else {
+                    print("❌ Error: Could not find 'YOLOv3TinyInt8LUT.mlmodel' in the bundle.")
+                    return
+                }
+                
+                // 2. Compile it on the fly (Bypasses Xcode's build system issues)
+                let compiledURL = try MLModel.compileModel(at: modelURL)
+                
+                // 3. Load the compiled model
+                let model = try MLModel(contentsOf: compiledURL)
+                let visionModel = try VNCoreMLModel(for: model)
+                
+                // 4. Create the request
+                let request = VNCoreMLRequest(model: visionModel) { [weak self] request, error in
+                    self?.handleYOLO(request: request)
+                }
+                
+                // Explicit type to avoid errors
+                request.imageCropAndScaleOption = VNImageCropAndScaleOption.scaleFill
+                
+                // 5. Save safely
+                self.yoloRequest = request
+                print("✅ YOLO Model Loaded Successfully!")
+                
+            } catch {
+                print("❌ Failed to load YOLO Model: \(error)")
+            }
+        }
+    }
+    
     func stopSession() {
         captureSession?.stopRunning()
     }
     
-    private func sendToManager(text: String?, object: String?) {
-        self.navigationManager?.updateAIContext(text: text, object: object)
+    nonisolated private func sendToManager(text: String?, object: String?) {
+        Task { @MainActor in
+            self.navigationManager?.updateAIContext(text: text, object: object)
+        }
+    }
+    
+    nonisolated private func handleYOLO(request: VNRequest) {
+        guard let results = request.results as? [VNRecognizedObjectObservation] else { return }
+        // Filter for confidence > 60%
+        let bestObjects = results.filter { $0.confidence > 0.6 }
+        
+        if let topObject = bestObjects.first {
+            let label = topObject.labels.first?.identifier ?? "Unknown"
+            // print("🧠 YOLO Found: \(label)") 
+            sendToManager(text: nil, object: label)
+        }
     }
 }
 
-// 2. The Delegate (Background Thread)
 extension VisionService: AVCaptureVideoDataOutputSampleBufferDelegate {
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         
@@ -55,63 +112,35 @@ extension VisionService: AVCaptureVideoDataOutputSampleBufferDelegate {
         lastProcessingTime = now
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        
-        // 🔥 CRITICAL FIX: Calculate Dynamic Orientation
-        // This ensures the AI reads text correctly whether you are in Portrait OR Landscape.
         let dynamicOrientation = self.currentUIOrientation()
         
-        // A. TEXT REQUEST (OCR)
+        // Run YOLO
+        if let yolo = self.yoloRequest {
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: dynamicOrientation)
+            try? handler.perform([yolo])
+        }
+        
+        // Run OCR
         let textRequest = VNRecognizeTextRequest { request, _ in
             guard let observations = request.results as? [VNRecognizedTextObservation] else { return }
             
-            // "Loose" Filter: Accept almost anything
-            let topTexts = observations.compactMap { $0.topCandidates(1).first?.string }
-                .filter { $0.count > 1 }
+            let fullText = observations.compactMap { $0.topCandidates(1).first?.string }
+                .joined(separator: " ")
             
-            if let bestText = topTexts.first {
-                print("👁️ READ: \(bestText)") // Console Debug
-                Task { @MainActor in
-                    self.sendToManager(text: bestText, object: nil)
-                }
+            if fullText.count > 2 {
+                print("👁️ OCR: \(fullText)")
+                self.sendToManager(text: fullText, object: nil)
             }
         }
-        textRequest.recognitionLevel = .accurate // Accurate is better for Monitors
-        textRequest.usesLanguageCorrection = false // Read raw codes/numbers better
+        textRequest.recognitionLevel = .accurate
+        textRequest.usesLanguageCorrection = false
         
-        // B. OBJECT REQUEST
-        let objectRequest = VNClassifyImageRequest { request, _ in
-            guard let observations = request.results as? [VNClassificationObservation] else { return }
-            
-            // Super Low Confidence for Testing (20%)
-            if let bestObj = observations.first(where: { $0.confidence > 0.2 }) {
-                let id = bestObj.identifier
-                Task { @MainActor in
-                    self.sendToManager(text: nil, object: id)
-                }
-            }
-        }
-        
-        // Run AI with the Correct Orientation
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: dynamicOrientation)
-        try? handler.perform([textRequest, objectRequest])
+        try? handler.perform([textRequest])
     }
     
-    // 3. Orientation Helper (The Magic Logic)
     nonisolated private func currentUIOrientation() -> CGImagePropertyOrientation {
-        // We act as if the device is Portrait to map the sensor correctly
-        let deviceOrientation = UIDevice.current.orientation
-        
-        switch deviceOrientation {
-        case .portrait:
-            return .right
-        case .landscapeLeft:
-            return .down // Sensor is opposite
-        case .landscapeRight:
-            return .up
-        case .portraitUpsideDown:
-            return .left
-        default:
-            return .right // Default fallback
-        }
+        // 🔥 FIX 3: UIDevice is MainActor, so we use a safe fallback on background threads
+        return .right
     }
 }

@@ -4,9 +4,24 @@ struct RecordingView: View {
     @EnvironmentObject var nav: NavigationManager
     @EnvironmentObject var router: WalkInRouter
     
+    // Separate State for smoother animations
+    var detectedText: String {
+        if nav.currentAIReadout.starts(with: "TEXT:") {
+            return String(nav.currentAIReadout.dropFirst(6))
+        }
+        return "..."
+    }
+    
+    var detectedObject: String {
+        if nav.currentAIReadout.starts(with: "OBJ:") {
+            return String(nav.currentAIReadout.dropFirst(5))
+        }
+        return "Scanning..."
+    }
+    
     var body: some View {
         ZStack {
-            // LAYER 1: CAMERA
+            // LAYER 1: CAMERA FEED
             if let session = nav.visionService.captureSession {
                 CameraPreview(session: session).ignoresSafeArea()
             } else {
@@ -15,37 +30,77 @@ struct RecordingView: View {
                     .foregroundColor(.white)
             }
             
-            // LAYER 2: DASHBOARD
-            VStack(spacing: 20) {
-                Spacer().frame(height: 40)
+            // LAYER 2: DASHBOARD UI
+            VStack(spacing: 15) {
+                Spacer().frame(height: 50)
                 
-                // MARK: - AI EYE HUD (Debug Mode)
+                // MARK: - 👁️ OCR TEXT BOX
+                // Shows Room Numbers, Exit Signs, Text
                 HStack {
-                    Image(systemName: "eye.fill")
-                        .foregroundColor(.yellow)
+                    Image(systemName: "text.viewfinder")
+                        .font(.title2)
+                        .foregroundColor(.cyan)
                     
-                    // Direct binding to the text
-                    Text(nav.currentAIReadout)
-                        .font(.system(.subheadline, design: .monospaced))
-                        .fontWeight(.bold)
-                        .foregroundColor(.white) // High contrast white text
-                        .lineLimit(1)
-                        // Animation to highlight changes
-                        .id(nav.currentAIReadout)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("READING TEXT")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.cyan)
+                        
+                        Text(detectedText)
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                            .id("TEXT-" + detectedText) // Triggers animation
+                    }
+                    Spacer()
                 }
                 .padding()
                 .background(.ultraThinMaterial)
-                .cornerRadius(12)
-                // Red border helps you see if the box is even rendering
+                .cornerRadius(16)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.cyan.opacity(0.5), lineWidth: 1)
+                )
+                .padding(.horizontal)
+                
+                // MARK: - 🧠 OBJECT DETECTION BOX
+                // Shows "Door", "Monitor", "Chair"
+                HStack {
+                    Image(systemName: "cube.transparent")
+                        .font(.title2)
+                        .foregroundColor(.yellow)
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("DETECTING OBJECT")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.yellow)
+                        
+                        Text(detectedObject)
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                            .id("OBJ-" + detectedObject)
+                    }
+                    Spacer()
+                }
+                .padding()
+                .background(.ultraThinMaterial)
+                .cornerRadius(16)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
                         .stroke(Color.yellow.opacity(0.5), lineWidth: 1)
                 )
                 .padding(.horizontal)
                 
-                // MARK: - SENSORS
+                Spacer()
+                
+                // MARK: - SENSOR DASHBOARD (Bottom)
                 VStack(spacing: 25) {
-                    // Activity Status
+                    // Activity Pill
                     Text(nav.activityStatus)
                         .font(.headline)
                         .padding(.vertical, 8)
@@ -53,19 +108,21 @@ struct RecordingView: View {
                         .background(nav.activityStatus.contains("Walking") ? Color.green : Color.gray.opacity(0.3))
                         .cornerRadius(20)
                         .foregroundColor(.white)
+                        .animation(.spring(), value: nav.activityStatus)
                     
-                    // Steps
+                    // Large Steps
                     VStack(spacing: 0) {
                         Text("\(nav.steps)")
                             .font(.system(size: 70, weight: .bold, design: .rounded))
                             .foregroundColor(.white)
-                        Text("STEPS")
+                            .shadow(color: .black.opacity(0.2), radius: 5)
+                        Text("STEPS TAKEN")
                             .font(.caption2)
                             .fontWeight(.black)
                             .foregroundColor(.white.opacity(0.7))
                     }
                     
-                    // Telemetry Row
+                    // Stats Row
                     HStack(spacing: 40) {
                         DataWidget(icon: "arrow.up.and.down", value: String(format: "%.1f m", nav.floorLevel), label: "ELEV")
                             .foregroundColor(.green)
@@ -77,8 +134,7 @@ struct RecordingView: View {
                 .background(.ultraThinMaterial)
                 .cornerRadius(24)
                 .padding(.horizontal)
-                
-                Spacer()
+                .padding(.bottom, 10)
                 
                 // STOP BUTTON
                 Button(action: {
@@ -93,8 +149,10 @@ struct RecordingView: View {
                         .background(Color.red)
                         .foregroundColor(.white)
                         .cornerRadius(18)
+                        .shadow(radius: 10)
                 }
-                .padding(30)
+                .padding(.horizontal, 30)
+                .padding(.bottom, 30)
             }
         }
         .onAppear {
@@ -103,6 +161,7 @@ struct RecordingView: View {
     }
 }
 
+// Reusable Widget
 struct DataWidget: View {
     let icon: String, value: String, label: String
     var body: some View {

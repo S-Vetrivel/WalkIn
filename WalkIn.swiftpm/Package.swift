@@ -17,6 +17,7 @@ let package = Package(
             name: "WalkIn",
             targets: ["AppModule"],
             bundleIdentifier: "Vetrivel.WalkIn",
+            teamIdentifier: "HZVZU3TQ9J",
             displayVersion: "1.0",
             bundleVersion: "1",
             appIcon: .placeholder(icon: .paper),
@@ -30,6 +31,11 @@ let package = Package(
                 .landscapeRight,
                 .landscapeLeft,
                 .portraitUpsideDown(.when(deviceFamilies: [.pad]))
+            ],
+            capabilities: [
+                .motion(purposeString: "Unknown Usage Description"),
+                .camera(purposeString: "Unknown Usage Description"),
+                .userTracking(purposeString: "Unknown Usage Description")
             ]
         )
     ],

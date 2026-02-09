@@ -1,17 +1,20 @@
 import SwiftUI
 
-class Router: ObservableObject {
-    @Published var path: [AppRoute] = []
+
+@MainActor
+class WalkInRouter: ObservableObject {
+    // The Active Screen (Starts at Home)
+    @Published var currentRoute: AppRoute = .home
     
+    // Function to change screens with animation
     func navigate(to route: AppRoute) {
-        path.append(route)
+        withAnimation(.easeInOut) {
+            currentRoute = route
+        }
     }
     
-    func goBack() {
-        path.removeLast()
-    }
-    
-    func reset() {
-        path = []
+    // Helper to return to start
+    func goHome() {
+        navigate(to: .home)
     }
 }

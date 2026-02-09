@@ -1,87 +1,117 @@
-import Vision
+import Foundation
 import AVFoundation
+import Vision
+import UIKit
 
-// @unchecked Sendable tells Swift: "I will handle thread safety, don't worry."
-class VisionService: NSObject, ObservableObject, @unchecked Sendable {
-    // Weak reference to avoid memory leaks
+// 1. Main Actor for UI Safety
+@MainActor
+class VisionService: NSObject, ObservableObject {
+    @Published var captureSession: AVCaptureSession?
     weak var navigationManager: NavigationManager?
     
-    // Simple throttle variables
-    private var lastScanTime: Date = Date()
-    private let scanInterval: TimeInterval = 1.0
+    // Safety Flags
+    nonisolated(unsafe) private var lastProcessingTime = Date()
+    nonisolated private let processingInterval = 0.2 // Very Fast Scanning (5x per second)
     
-    // This must be MainActor so NavigationManager can call it safely
-    @MainActor
     func setup(with manager: NavigationManager) {
         self.navigationManager = manager
+        
+        Task.detached {
+            let session = AVCaptureSession()
+            session.sessionPreset = .high // High Res for better OCR
+            
+            guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+                  let input = try? AVCaptureDeviceInput(device: device) else { return }
+            
+            if session.canAddInput(input) { session.addInput(input) }
+            
+            let output = AVCaptureVideoDataOutput()
+            output.setSampleBufferDelegate(self, queue: DispatchQueue(label: "aiQueue"))
+            if session.canAddOutput(output) { session.addOutput(output) }
+            
+            session.startRunning()
+            
+            await MainActor.run {
+                self.captureSession = session
+            }
+        }
     }
     
-    // Called by the Camera Coordinator on a background thread
-    func processFrame(_ buffer: CVPixelBuffer) {
-        // 1. Simple Throttle Check
+    func stopSession() {
+        captureSession?.stopRunning()
+    }
+    
+    private func sendToManager(text: String?, object: String?) {
+        self.navigationManager?.updateAIContext(text: text, object: object)
+    }
+}
+
+// 2. The Delegate (Background Thread)
+extension VisionService: AVCaptureVideoDataOutputSampleBufferDelegate {
+    nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        
         let now = Date()
-        if now.timeIntervalSince(lastScanTime) < scanInterval { return }
-        lastScanTime = now
+        guard now.timeIntervalSince(lastProcessingTime) >= processingInterval else { return }
+        lastProcessingTime = now
         
-        // 2. Define Requests
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         
-        // A. TEXT REQUEST
-        let textRequest = VNRecognizeTextRequest { [weak self] request, _ in
-            guard let self = self else { return } // Safe unwrap
+        // 🔥 CRITICAL FIX: Calculate Dynamic Orientation
+        // This ensures the AI reads text correctly whether you are in Portrait OR Landscape.
+        let dynamicOrientation = self.currentUIOrientation()
+        
+        // A. TEXT REQUEST (OCR)
+        let textRequest = VNRecognizeTextRequest { request, _ in
             guard let observations = request.results as? [VNRecognizedTextObservation] else { return }
-            let topCandidate = observations.first?.topCandidates(1).first
             
-            if let text = topCandidate?.string, text.count > 3 {
-                if ["EXIT", "PUSH", "PULL"].contains(text.uppercased()) { return }
-                
-                // FIX: Explicitly capture self weakly again for the async block
-                DispatchQueue.main.async { [weak self] in
-                    self?.handleDetection(text: text, object: nil)
+            // "Loose" Filter: Accept almost anything
+            let topTexts = observations.compactMap { $0.topCandidates(1).first?.string }
+                .filter { $0.count > 1 }
+            
+            if let bestText = topTexts.first {
+                print("👁️ READ: \(bestText)") // Console Debug
+                Task { @MainActor in
+                    self.sendToManager(text: bestText, object: nil)
                 }
             }
         }
-        textRequest.recognitionLevel = .accurate
+        textRequest.recognitionLevel = .accurate // Accurate is better for Monitors
+        textRequest.usesLanguageCorrection = false // Read raw codes/numbers better
         
         // B. OBJECT REQUEST
-        let objectRequest = VNClassifyImageRequest { [weak self] request, _ in
-            guard let self = self else { return } // Safe unwrap
+        let objectRequest = VNClassifyImageRequest { request, _ in
             guard let observations = request.results as? [VNClassificationObservation] else { return }
             
-            if let bestResult = observations.first(where: { $0.confidence > 0.8 }) {
-                let interestingObjects = ["computer keyboard", "monitor", "water bottle", "desk", "fire extinguisher", "printer", "laptop"]
-                let identifier = bestResult.identifier.lowercased()
-                
-                if interestingObjects.contains(where: { identifier.contains($0) }) {
-                    let cleanName = identifier.components(separatedBy: ",").first ?? identifier
-                    
-                    // FIX: Explicitly capture self weakly again for the async block
-                    DispatchQueue.main.async { [weak self] in
-                        self?.handleDetection(text: nil, object: cleanName)
-                    }
+            // Super Low Confidence for Testing (20%)
+            if let bestObj = observations.first(where: { $0.confidence > 0.2 }) {
+                let id = bestObj.identifier
+                Task { @MainActor in
+                    self.sendToManager(text: nil, object: id)
                 }
             }
         }
         
-        // 3. execute requests
-        let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up)
+        // Run AI with the Correct Orientation
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: dynamicOrientation)
         try? handler.perform([textRequest, objectRequest])
     }
     
-    // Removed @MainActor here because we are already calling it inside DispatchQueue.main.async
-    // This avoids the double-check confusion for the compiler.
-    private func handleDetection(text: String?, object: String?) {
-        // We are on Main Thread, so it's safe to call the actor-isolated manager
-        if let text = text {
-            print("👁️ AI Saw: \(text)")
-            Task { @MainActor in
-                navigationManager?.recordNode(label: text, side: .right, isAI: true)
-            }
-        }
-        if let object = object {
-            print("🧠 AI Found: \(object)")
-            Task { @MainActor in
-                navigationManager?.recordNode(object: object, side: .right, isAI: true)
-            }
+    // 3. Orientation Helper (The Magic Logic)
+    nonisolated private func currentUIOrientation() -> CGImagePropertyOrientation {
+        // We act as if the device is Portrait to map the sensor correctly
+        let deviceOrientation = UIDevice.current.orientation
+        
+        switch deviceOrientation {
+        case .portrait:
+            return .right
+        case .landscapeLeft:
+            return .down // Sensor is opposite
+        case .landscapeRight:
+            return .up
+        case .portraitUpsideDown:
+            return .left
+        default:
+            return .right // Default fallback
         }
     }
 }

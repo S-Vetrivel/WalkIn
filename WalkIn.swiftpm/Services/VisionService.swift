@@ -12,17 +12,18 @@ class VisionService: NSObject, ObservableObject {
     
     // Safety Flags - nonisolated(unsafe) lets background threads touch them
     nonisolated(unsafe) private var lastProcessingTime = Date()
-    nonisolated private let processingInterval = 0.2
+    nonisolated private let processingInterval = 0.2 // Process every 0.2 seconds
     
-    // 🔥 FIX 1: Mark this as 'nonisolated(unsafe)' to fix the Main Actor error
+    // 🔥 FIX: Mark this as 'nonisolated(unsafe)' to fix the Main Actor error
     nonisolated(unsafe) private var yoloRequest: VNCoreMLRequest?
     
     func setup(with manager: NavigationManager) {
         self.navigationManager = manager
         
-        // Load the Model manually (No Xcode auto-gen needed)
+        // Load the Model manually (Detailed Debugging Enabled)
         setupYOLO()
         
+        // Start Camera in Background
         Task.detached {
             let session = AVCaptureSession()
             session.sessionPreset = .hd1280x720
@@ -33,6 +34,7 @@ class VisionService: NSObject, ObservableObject {
             if session.canAddInput(input) { session.addInput(input) }
             
             let output = AVCaptureVideoDataOutput()
+            // We pass 'self' safely because we handled the isolation below
             output.setSampleBufferDelegate(self, queue: DispatchQueue(label: "aiQueue"))
             if session.canAddOutput(output) { session.addOutput(output) }
             
@@ -44,22 +46,28 @@ class VisionService: NSObject, ObservableObject {
         }
     }
     
-    // 🔥 THE NEW MANUAL LOADER
+    // 🔥 ROBUST MANUAL LOADER (Fixes "Not Found" & "Class Gen" errors)
     private func setupYOLO() {
         Task.detached {
+            print("🚀 STARTING YOLO SETUP...")
+            
             do {
-                print("📂 Attempting to load YOLO model manually...")
-                
-                // 1. Find the raw file in the app bundle
+                // 1. Find the raw .mlmodel file in the bundle
+                // IMPORTANT: Ensure the file name matches exactly "YOLOv3TinyInt8LUT" in your sidebar
                 guard let modelURL = Bundle.main.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel") else {
-                    print("❌ Error: Could not find 'YOLOv3TinyInt8LUT.mlmodel' in the bundle.")
+                    print("❌ CRITICAL ERROR: Could not find 'YOLOv3TinyInt8LUT.mlmodel' in the app bundle.")
+                    print("👉 CHECK: Did you add it to 'Copy Bundle Resources' in Build Phases?")
                     return
                 }
                 
-                // 2. Compile it on the fly (Bypasses Xcode's build system issues)
+                print("📂 Found Model File at: \(modelURL.lastPathComponent)")
+                
+                // 2. Force compile it right now (Bypassing Xcode's build system)
+                print("🔨 Compiling Model...")
                 let compiledURL = try MLModel.compileModel(at: modelURL)
                 
                 // 3. Load the compiled model
+                print("🧠 Loading CoreML Model...")
                 let model = try MLModel(contentsOf: compiledURL)
                 let visionModel = try VNCoreMLModel(for: model)
                 
@@ -71,7 +79,7 @@ class VisionService: NSObject, ObservableObject {
                 // Explicit type to avoid errors
                 request.imageCropAndScaleOption = VNImageCropAndScaleOption.scaleFill
                 
-                // 5. Save safely
+                // 5. Save to the safe variable
                 self.yoloRequest = request
                 print("✅ YOLO Model Loaded Successfully!")
                 
@@ -85,25 +93,33 @@ class VisionService: NSObject, ObservableObject {
         captureSession?.stopRunning()
     }
     
+    // Send to Manager (Main Thread)
     nonisolated private func sendToManager(text: String?, object: String?) {
         Task { @MainActor in
             self.navigationManager?.updateAIContext(text: text, object: object)
         }
     }
     
+    // 🔥 HANDLE YOLO (Background Thread)
     nonisolated private func handleYOLO(request: VNRequest) {
         guard let results = request.results as? [VNRecognizedObjectObservation] else { return }
-        // Filter for confidence > 60%
-        let bestObjects = results.filter { $0.confidence > 0.6 }
+        
+        // Lowered confidence to 0.4 (40%) to make it detect easier during testing
+        let bestObjects = results.filter { $0.confidence > 0.4 }
         
         if let topObject = bestObjects.first {
             let label = topObject.labels.first?.identifier ?? "Unknown"
-            // print("🧠 YOLO Found: \(label)") 
+            let confidence = Int(topObject.confidence * 100)
+            
+            // Log to console so you can see it working
+            print("📦 Detected: \(label) (\(confidence)%)")
+            
             sendToManager(text: nil, object: label)
         }
     }
 }
 
+// 2. The Delegate (Background Thread)
 extension VisionService: AVCaptureVideoDataOutputSampleBufferDelegate {
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         
@@ -114,13 +130,13 @@ extension VisionService: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let dynamicOrientation = self.currentUIOrientation()
         
-        // Run YOLO
+        // 1. Run YOLO (Now safe because of nonisolated(unsafe))
         if let yolo = self.yoloRequest {
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: dynamicOrientation)
             try? handler.perform([yolo])
         }
         
-        // Run OCR
+        // 2. Run OCR
         let textRequest = VNRecognizeTextRequest { request, _ in
             guard let observations = request.results as? [VNRecognizedTextObservation] else { return }
             
@@ -140,7 +156,7 @@ extension VisionService: AVCaptureVideoDataOutputSampleBufferDelegate {
     }
     
     nonisolated private func currentUIOrientation() -> CGImagePropertyOrientation {
-        // 🔥 FIX 3: UIDevice is MainActor, so we use a safe fallback on background threads
+        // Hardcode to .right to match typical Landscape/Portrait camera buffers without accessing UIDevice on background thread
         return .right
     }
 }

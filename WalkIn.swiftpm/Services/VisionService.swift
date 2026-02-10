@@ -51,39 +51,41 @@ class VisionService: NSObject, ObservableObject {
         Task.detached {
             print("🚀 STARTING YOLO SETUP...")
             
-            // 1. Search for the raw model file
+            // 1. Search for the raw model file (Package or File)
             var foundURL: URL?
-            let filename = "YOLOv3TinyInt8LUT"
-            let ext = "mlmodel_raw"
             
-            // detailed logging to find where the resource is
-             let bundles = [Bundle.main, Bundle(for: VisionService.self)]
-             for (index, bundle) in bundles.enumerated() {
-                 print("📦 Scanning Bundle \(index): \(bundle.bundlePath)")
-                 if let url = bundle.url(forResource: filename, withExtension: ext) {
-                     print("   ✅ Found in root of bundle!")
-                     foundURL = url
-                     break
-                 }
-                 if let url = bundle.url(forResource: filename, withExtension: ext, subdirectory: "AIModels") {
-                     print("   ✅ Found in AIModels subdirectory!")
-                     foundURL = url
-                     break
-                 }
-             }
+            // Supporting both single file and package formats
+            let modelFiles = [("FastViTT8F16", "mlpackage_raw"), ("YOLOv3TinyInt8LUT", "mlmodel_raw")]
+            
+            for (name, ext) in modelFiles {
+                let bundles = [Bundle.main, Bundle(for: VisionService.self)]
+                for bundle in bundles {
+                    if let url = bundle.url(forResource: name, withExtension: ext) {
+                        foundURL = url; break
+                    }
+                    if let url = bundle.url(forResource: name, withExtension: ext, subdirectory: "AIModels") {
+                        foundURL = url; break
+                    }
+                }
+                if foundURL != nil { break }
+            }
 
             guard let sourceURL = foundURL else {
-                print("❌ CRITICAL ERROR: Could not find '\(filename).\(ext)' anywhere.")
+                print("❌ CRITICAL ERROR: Could not find model file (FastViT or YOLO) anywhere.")
                 return
             }
             
             print("✅ Found Raw Model File at: \(sourceURL.path)")
             
             do {
-                // 2. Copy to a temporary location with correct extension (.mlmodel)
+                // 2. Determine temp extension based on source
+                let isPackage = sourceURL.pathExtension == "mlpackage_raw"
+                let tempExt = isPackage ? "mlpackage" : "mlmodel"
+                let tempName = "TempModel.\(tempExt)"
+                
                 let fileManager = FileManager.default
                 let tempDirectory = fileManager.temporaryDirectory
-                let tempModelURL = tempDirectory.appendingPathComponent("YOLOv3TinyInt8LUT.mlmodel")
+                let tempModelURL = tempDirectory.appendingPathComponent(tempName)
                 
                 // Remove existing file if present
                 if fileManager.fileExists(atPath: tempModelURL.path) {
@@ -102,11 +104,14 @@ class VisionService: NSObject, ObservableObject {
                 let visionModel = try VNCoreMLModel(for: model)
                 
                 let request = VNCoreMLRequest(model: visionModel) { [weak self] request, error in
-                    self?.handleYOLO(request: request)
+                    self?.handleVisionResults(request: request)
                 }
                 
-request.imageCropAndScaleOption = VNImageCropAndScaleOption.centerCrop                self.yoloRequest = request
-                print("🎉 YOLO MODEL FULLY LOADED & READY!")
+                // FastViT might respond better to different scaling, but default to centerCrop as requested or scaleFill
+                request.imageCropAndScaleOption = VNImageCropAndScaleOption.scaleFill 
+                
+                self.yoloRequest = request
+                print("🎉 MODEL FULLY LOADED & READY!")
                 
             } catch {
                 print("❌ MODEL LOAD CRASHED: \(error)")
@@ -125,30 +130,46 @@ request.imageCropAndScaleOption = VNImageCropAndScaleOption.centerCrop          
         }
     }
     
-    // 🔥 HANDLE YOLO (Background Thread)
-    nonisolated private func handleYOLO(request: VNRequest) {
-        guard let results = request.results as? [VNRecognizedObjectObservation] else { 
-            print("⚠️ YOLO: No results or wrong observation type")
-            return 
-        }
-        
-        if results.isEmpty {
-            print("🔍 YOLO: Frame processed, but no objects seen (results empty)")
+    // 🔥 HANDLE VISION RESULTS (Generic)
+    nonisolated private func handleVisionResults(request: VNRequest) {
+        if let results = request.results as? [VNRecognizedObjectObservation] {
+            handleObjectDetection(results: results)
+        } else if let results = request.results as? [VNClassificationObservation] {
+            handleClassification(results: results)
         } else {
-            print("📊 YOLO: Found \(results.count) potential objects")
+            print("⚠️ Vision: Unknown result type: \(type(of: request.results?.first))")
         }
-        
-        // Lowered confidence to 0.4 (40%) to make it detect easier during testing
+    }
+
+    // Handle Object Detection (YOLO, SSD, etc.)
+    nonisolated private func handleObjectDetection(results: [VNRecognizedObjectObservation]) {
+        if results.isEmpty {
+             // print("🔍 Detection: No objects")
+        } else {
+             print("📊 Detection: Found \(results.count) objects")
+        }
+
         let bestObjects = results.filter { $0.confidence > 0.4 }
         
         if let topObject = bestObjects.first {
             let label = topObject.labels.first?.identifier ?? "Unknown"
-            let confidence = Int(topObject.confidence * 100)
+            // let confidence = Int(topObject.confidence * 100)
             
-            // Log to console so you can see it working
-            print("📦 Detected: \(label) (\(confidence)%)")
-            
+            // print("📦 Detected: \(label) (\(confidence)%)")
             sendToManager(text: nil, object: label)
+        }
+    }
+    
+    // Handle Classification (FastViT, ResNet, etc.)
+    nonisolated private func handleClassification(results: [VNClassificationObservation]) {
+        let bestResults = results.filter { $0.confidence > 0.4 }
+        
+        if let topResult = bestResults.first {
+             let label = topResult.identifier
+             let confidence = Int(topResult.confidence * 100)
+             
+             print("🏷️ Classified: \(label) (\(confidence)%)")
+             sendToManager(text: nil, object: label)
         }
     }
 }

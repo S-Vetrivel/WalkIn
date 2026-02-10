@@ -34,7 +34,6 @@ struct PathNode: Codable, Identifiable {
     }
     
     // AI Data (The "Eyes")
-    var image: String?          // Relative path to saved image (for visual alignment)
     var aiLabel: String?       // Text (OCR) e.g., "Room 302"
     var detectedObject: String? // Object e.g., "Water Cooler"
     var summary: String?        // Narrative e.g., "Walked past Room 302"
@@ -47,7 +46,7 @@ struct PathNode: Codable, Identifiable {
     }
     
     // Init with matrix
-    init(timestamp: Date, stepCount: Int, heading: Double, floorLevel: Double, transform: simd_float4x4, image: String? = nil, aiLabel: String? = nil, detectedObject: String? = nil) {
+    init(timestamp: Date, stepCount: Int, heading: Double, floorLevel: Double, transform: simd_float4x4, aiLabel: String? = nil, detectedObject: String? = nil) {
         self.timestamp = timestamp
         self.stepCount = stepCount
         self.heading = heading
@@ -66,7 +65,6 @@ struct PathNode: Codable, Identifiable {
             c3.x, c3.y, c3.z, c3.w
         ]
         
-        self.image = image
         self.aiLabel = aiLabel
         self.detectedObject = detectedObject
         self.side = .none

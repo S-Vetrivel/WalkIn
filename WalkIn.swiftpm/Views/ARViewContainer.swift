@@ -30,7 +30,7 @@ struct ARViewContainer: UIViewRepresentable {
         return arView
     }
     
-    func updateUIView(_ uiView: ARSCNView, context: Context) {
+    func updateUIView(_: ARSCNView, context: Context) {
         // Here we update the scene based on path data
         context.coordinator.updatePathNodes(path: path, targetIndex: targetNodeIndex, mode: mode)
     }
@@ -54,6 +54,7 @@ struct ARViewContainer: UIViewRepresentable {
         var currentTargetIndex: Int = 0
         var currentMode: NavigationManager.SessionMode = .idle
         
+        @MainActor
         func updatePathNodes(path: [PathNode], targetIndex: Int, mode: NavigationManager.SessionMode) {
             guard let arView = arView else { return }
             
@@ -63,6 +64,7 @@ struct ARViewContainer: UIViewRepresentable {
             self.currentMode = mode
             
             // Render new nodes
+            // Note: ARSCNView.scene is MainActor isolated.
             for (index, nodeData) in path.enumerated() {
                 if !renderedNodeIds.contains(nodeData.id) {
                     addSpheres(for: nodeData, to: arView)
@@ -140,6 +142,7 @@ struct ARViewContainer: UIViewRepresentable {
         // MARK: - Arrow Logic
         var arrowNode: SCNNode?
         
+        @MainActor
         func updateArrow(targetIndex: Int, path: [PathNode], mode: NavigationManager.SessionMode) {
             guard let arView = arView, mode == .navigating, targetIndex < path.count else {
                 arrowNode?.removeFromParentNode()
@@ -155,6 +158,7 @@ struct ARViewContainer: UIViewRepresentable {
             // Position and Rotation are handled in renderer callback for smoothness
         }
         
+        @MainActor
         private func createArrow() {
             guard let arView = arView else { return }
             
@@ -179,8 +183,11 @@ struct ARViewContainer: UIViewRepresentable {
         }
         
         func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+            // Note: This runs on a background thread!
+            // Do NOT access arView (MainActor) here.
+            
             guard let arrow = arrowNode,
-                  let pointOfView = arView?.pointOfView,
+                  let pointOfView = renderer.pointOfView, // Use renderer prop, threading safe(r)
                   currentMode == .navigating,
                   currentTargetIndex < currentPath.count
             else { return }

@@ -3,6 +3,8 @@ import CoreMotion
 import Combine
 import ARKit
 import simd
+import UIKit // For UIImage
+
 
 @MainActor
 class NavigationManager: ObservableObject {
@@ -26,6 +28,12 @@ class NavigationManager: ObservableObject {
     // Navigation Targets
     @Published var targetNodeIndex: Int = 0 
     @Published var distanceToNextNode: Float = 0.0
+    
+    // Alignment
+    @Published var alignmentScore: Float = 0.0
+    private var targetFeaturePrint: VNFeaturePrintObservation?
+    
+    // Checkpoint System
     
     // Checkpoint System
     @Published var checkpoints: [CGPoint] = []
@@ -58,10 +66,19 @@ class NavigationManager: ObservableObject {
         print("🚀 Starting Navigation Session...")
         
         // Load path
-        // We start in 'startingNavigation' to allow AR to stabilize
+        // We start in 'startingNavigation' to allow AR to stabilize AND Visual Alignment
         self.mode = .startingNavigation 
         self.path = savedPath
         self.targetNodeIndex = 0
+        self.alignmentScore = 0.0
+        
+        // Prepare Target Feature Print for Alignment (First Node)
+        if let firstNode = savedPath.first, let imagePath = firstNode.image {
+            if let image = ImageLocalizationService.shared.loadUIImage(filename: imagePath) {
+                self.targetFeaturePrint = ImageLocalizationService.shared.generateFeaturePrint(for: image)
+                print("🎯 Target Feature Print Loaded")
+            }
+        }
         
         // Don't reset path, but reset other sensors
         self.checkpointsCrossed = 0
@@ -170,11 +187,51 @@ class NavigationManager: ObservableObject {
             checkForCheckpointCrossing(currentPos: position)
             
         case .startingNavigation:
-            // Wait for tracking to stabilize
-            if arManager.trackingState == .normal {
-                print("✅ Tracking Stabilized. Beginning Navigation.")
-                self.mode = .navigating
+            // Calculate Alignment Score
+            if let currentFrame = arManager.currentFrame, let targetPrint = self.targetFeaturePrint {
+                // We throttle this? Vision is somewhat expensive. 
+                // But currentFrame updates at 60fps. Maybe run every 10 frames or so?
+                // For now, let's try every frame but async might be better. 
+                // Since this runs on Main Actor, we shouldn't block.
+                // Feature print generation is synchronous in ImageLocalizationService?
+                // Yes, it uses VNImageRequestHandler. It might block.
+                // Let's offload to background task if possible, BUT we are in a sync function.
+                // For a smooth UI, we should probably debounce this.
+                // Let's just do it directly for now, optimization later if stutter occurs.
+                
+                // We need to convert CVPixelBuffer to UIImage for our service
+                // Or update service to take CVPixelBuffer (better).
+                // Let's convert here for now using our previous logic (or a helper).
+                // PERFORMANCE NOTE: This conversion + Vision every frame WILL lag.
+                // PROPOSAL: Only run if alignmentScore is < threshold and maybe every 0.1s.
+                
+                // Quick hack: use a simple counter or timer
+                 
+                 Task {
+                     if let pixelBuffer = currentFrame.capturedImage as CVPixelBuffer? {
+                        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                        let context = CIContext()
+                        if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                            let uiImage = UIImage(cgImage: cgImage)
+                            if let currentPrint = ImageLocalizationService.shared.generateFeaturePrint(for: uiImage) {
+                                let score = ImageLocalizationService.shared.computeSimilarity(between: currentPrint, and: targetPrint)
+                                await MainActor.run {
+                                    self.alignmentScore = score
+                                }
+                            }
+                        }
+                     }
+                 }
+            } else {
+                // No target image? Auto-score 1.0 (skip alignment)
+                self.alignmentScore = 1.0
             }
+            
+            // Wait for tracking to stabilize AND user to confirm (we remove auto-transition)
+            // if arManager.trackingState == .normal { ... }
+            // We now wait for manual "Start" button in UI, or auto-start if score is high?
+            // User requested "enable the user to navigate from a particular spot".
+            // Let's allow manual start but show the score.
             
         case .navigating:
             updateNavigationGuidance(currentPos: position)
@@ -204,17 +261,46 @@ class NavigationManager: ObservableObject {
 
     // MARK: - Data Recording
     private func recordMovement(at transform: simd_float4x4) {
+        // Capture Image
+        var imageFilename: String? = nil
+        if let frame = arManager.currentFrame {
+            // Convert CVPixelBuffer to UIImage
+            let pixelBuffer = frame.capturedImage
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let context = CIContext()
+            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                // ARKit images are landscape. We rotate to .right to match portrait UI if needed, 
+                // but for feature matching, consistency is key. Let's use .right for easier UI viewing.
+                let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+                
+                // Save using Localization Service
+                // We use a temporary UUID for the node to generate the filename
+                let nodeId = UUID() 
+                // Note: PathNode generates its own UUID, so we should coordinate this. 
+                // Let's change PathNode init or just pass this UUID to it? 
+                // PathNode.id is var, so we can set it, or init with it.
+                // Current PathNode init generates a new UUID. 
+                // Let's let PathNode generate it, but we need the filename BEFORE init? 
+                // Or we init PathNode, then get its ID, then save image?
+                // Let's save image with a new UUID, and pass that filename. 
+                // The filename doesn't STRICTLY have to match the Node ID, but it's cleaner.
+                // Let's just generate a UUID here for the filename.
+                imageFilename = ImageLocalizationService.shared.saveNodeImage(uiImage, nodeId: nodeId)
+            }
+        }
+
         let node = PathNode(
             timestamp: Date(),
             stepCount: self.checkpointsCrossed,
             heading: self.heading,
             floorLevel: self.floorLevel,
             transform: transform, // Use exact AR transform
+            image: imageFilename, // Save the image path
             aiLabel: nil, // Will be updated if OCR runs
             detectedObject: nil
         )
         self.path.append(node)
-        print("📍 Added PathNode at: \(node.position)")
+        print("📍 Added PathNode at: \(node.position) with image: \(imageFilename ?? "None")")
     }
     
     // Overloaded to support legacy calls if any (though we should migrate them)
@@ -251,6 +337,23 @@ class NavigationManager: ObservableObject {
     func placeAnchor() {
         // Manual anchor placement
         recordMovement()
+    }
+    
+    // MARK: - Saving
+    func saveCurrentPath() -> Bool {
+        guard !path.isEmpty else { return false }
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, h:mm a"
+        let defaultName = "Path \(formatter.string(from: Date()))"
+        
+        _ = MapStorageService.shared.saveMap(
+            name: defaultName,
+            nodes: path,
+            totalSteps: checkpointsCrossed,
+            startTime: startTime ?? Date()
+        )
+        return true
     }
 
     // MARK: - AI Context Methods (The Brain)

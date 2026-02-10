@@ -112,7 +112,6 @@ struct Scene3DView: View {
                     cylinderNode.position = SCNVector3(midX, midY, midZ)
                     
                     // Rotate to connect nodes
-                    let direction = SCNVector3(dx, dy, dz)
                     cylinderNode.look(at: SCNVector3(node.position.x, node.position.y, node.position.z))
                     cylinderNode.eulerAngles.x += Float.pi / 2
                     

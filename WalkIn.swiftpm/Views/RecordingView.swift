@@ -1,23 +1,12 @@
 import SwiftUI
+import UIKit // For UIImage
 
 struct RecordingView: View {
     @EnvironmentObject var nav: NavigationManager
     @EnvironmentObject var router: WalkInRouter
     
-    @State private var showingSaveAlert = false
-    @State private var mapName = ""
     @State private var showInstructions = true
     @State private var show3DView = false // Added view toggle state
-    
-    func saveMap() {
-        let name = mapName.isEmpty ? "Untitled Map" : mapName
-        _ = MapStorageService.shared.saveMap(
-            name: name,
-            nodes: nav.path,
-            totalSteps: nav.checkpointsCrossed,
-            startTime: nav.startTime ?? Date() // We need to track start time in NavManager
-        )
-    }
     
     // Separate State for smoother animations
     var detectedText: String {
@@ -161,13 +150,14 @@ struct RecordingView: View {
                 
                 // STOP BUTTON
                 Button(action: {
-                    nav.stopTracking()
                     if nav.mode == .navigating {
-                        // Just exit
+                        nav.stopTracking()
                         router.navigate(to: .home)
                     } else {
-                        // Recording: Prompt to save
-                        showingSaveAlert = true
+                        // Recording: Save immediately
+                        nav.stopTracking()
+                         _ = nav.saveCurrentPath()
+                        router.navigate(to: .home)
                     }
                 }) {
                     Text(nav.mode == .navigating ? "EXIT NAVIGATION" : "FINISH PATH")
@@ -181,22 +171,6 @@ struct RecordingView: View {
                 }
                 .padding(.horizontal, 30)
                 .padding(.bottom, 30)
-                .alert("Save Map", isPresented: $showingSaveAlert) {
-                    TextField("Map Name", text: $mapName)
-                    Button("Save") {
-                        saveMap()
-                        router.navigate(to: .home)
-                    }
-                    Button("Discard", role: .destructive) {
-                        router.navigate(to: .home)
-                    }
-                    Button("Cancel", role: .cancel) {
-                        // Do nothing, resume
-                         nav.startRecording()
-                    }
-                } message: {
-                    Text("Name your journey to save it.")
-                }
             }
             
             // LAYER 3: INSTRUCTIONS OVERLAY
@@ -240,33 +214,92 @@ struct RecordingView: View {
                 .transition(.scale)
             }
             
-            // LAYER 4: NAVIGATION STARTUP OVERLAY
+            // LAYER 4: VISUAL ALIGNMENT UI
             if nav.mode == .startingNavigation {
-                 Color.black.opacity(0.8).ignoresSafeArea()
+                 Color.black.opacity(0.6).ignoresSafeArea()
                  
                  VStack(spacing: 20) {
-                     ProgressView()
-                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                         .scaleEffect(2)
-                     
-                     Text("Aligning to Start...")
+                     Text("Visual Alignment")
                          .font(.title2)
                          .bold()
                          .foregroundColor(.white)
                      
-                     Text("Please stand at the exact starting point of the path and look forward.")
-                         .font(.body)
-                         .multilineTextAlignment(.center)
-                         .foregroundColor(.white.opacity(0.8))
-                         .padding(.horizontal)
+                     // Target Image Preview
+                     if let firstNode = nav.path.first, 
+                        let imagePath = firstNode.image,
+                        let uiImage = ImageLocalizationService.shared.loadUIImage(filename: imagePath) {
+                         
+                         VStack {
+                             Text("ALIGN WITH THIS VIEW")
+                                 .font(.caption)
+                                 .fontWeight(.bold)
+                                 .foregroundColor(.yellow)
+                             
+                             Image(uiImage: uiImage)
+                                 .resizable()
+                                 .scaledToFit()
+                                 .frame(height: 200)
+                                 .cornerRadius(12)
+                                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.yellow, lineWidth: 2))
+                         }
+                     } else {
+                         Text("No reference image found. Just start.")
+                             .foregroundColor(.gray)
+                     }
                      
-                     Text("Wait for tracking to stabilize.")
+                     // Match Score Indicator
+                     VStack {
+                         Text("MATCH SCORE")
+                             .font(.caption2)
+                             .foregroundColor(.white.opacity(0.8))
+                         
+                         HStack {
+                             ProgressView(value: Double(nav.alignmentScore))
+                                 .progressViewStyle(LinearProgressViewStyle(tint: nav.alignmentScore > 0.6 ? .green : .red))
+                                 .frame(height: 8)
+                             Text(String(format: "%.0f%%", nav.alignmentScore * 100))
+                                 .font(.headline)
+                                 .foregroundColor(nav.alignmentScore > 0.6 ? .green : .red)
+                                 .frame(width: 50)
+                         }
+                         .padding(.horizontal)
+                     }
+                     
+                     // Controls
+                     Button(action: {
+                         withAnimation {
+                             nav.mode = .navigating // Start!
+                         }
+                     }) {
+                         HStack {
+                             if nav.alignmentScore > 0.6 {
+                                 Image(systemName: "checkmark.circle.fill")
+                                 Text("START NAVIGATION")
+                             } else {
+                                 Image(systemName: "exclamationmark.triangle.fill")
+                                 Text("FORCE START")
+                             }
+                         }
+                         .font(.headline)
+                         .padding()
+                         .frame(maxWidth: .infinity)
+                         .background(nav.alignmentScore > 0.6 ? Color.green : Color.orange)
+                         .foregroundColor(.white)
+                         .cornerRadius(12)
+                     }
+                     .padding(.top)
+                     
+                     Text("Point camera at the start location until score turns green.")
                          .font(.caption)
-                         .foregroundColor(.gray)
+                         .foregroundColor(.white.opacity(0.7))
+                         .multilineTextAlignment(.center)
+                         .padding(.horizontal)
                  }
-                 .padding(40)
+                 .padding(30)
                  .background(.ultraThinMaterial)
-                 .cornerRadius(20)
+                 .cornerRadius(24)
+                 .padding(30)
+                 .transition(.scale)
             }
         }
     }

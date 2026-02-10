@@ -65,8 +65,8 @@ class VisionService: NSObject, ObservableObject {
                      foundURL = url
                      break
                  }
-                 if let url = bundle.url(forResource: filename, withExtension: ext, subdirectory: "Resources") {
-                     print("   ✅ Found in Resources subdirectory!")
+                 if let url = bundle.url(forResource: filename, withExtension: ext, subdirectory: "AIModels") {
+                     print("   ✅ Found in AIModels subdirectory!")
                      foundURL = url
                      break
                  }
@@ -128,7 +128,16 @@ class VisionService: NSObject, ObservableObject {
     
     // 🔥 HANDLE YOLO (Background Thread)
     nonisolated private func handleYOLO(request: VNRequest) {
-        guard let results = request.results as? [VNRecognizedObjectObservation] else { return }
+        guard let results = request.results as? [VNRecognizedObjectObservation] else { 
+            print("⚠️ YOLO: No results or wrong observation type")
+            return 
+        }
+        
+        if results.isEmpty {
+            print("🔍 YOLO: Frame processed, but no objects seen (results empty)")
+        } else {
+            print("📊 YOLO: Found \(results.count) potential objects")
+        }
         
         // Lowered confidence to 0.4 (40%) to make it detect easier during testing
         let bestObjects = results.filter { $0.confidence > 0.4 }
@@ -159,7 +168,13 @@ extension VisionService: AVCaptureVideoDataOutputSampleBufferDelegate {
         // 1. Run YOLO (Now safe because of nonisolated(unsafe))
         if let yolo = self.yoloRequest {
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: dynamicOrientation)
-            try? handler.perform([yolo])
+            do {
+                try handler.perform([yolo])
+            } catch {
+                print("❌ YOLO Execution Error: \(error)")
+            }
+        } else {
+            // print("⏳ YOLO: Waiting for model to load...")
         }
         
         // 2. Run OCR

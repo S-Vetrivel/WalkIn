@@ -83,6 +83,9 @@ struct MapLibraryView: View {
 
 // Detail View for a single map
 struct SavedMapView: View {
+    @EnvironmentObject var navManager: NavigationManager
+    @EnvironmentObject var router: WalkInRouter
+    
     let map: SavedMap
     var onBack: () -> Void
     
@@ -108,9 +111,29 @@ struct SavedMapView: View {
                 .padding(.bottom, 8)
             
             // Re-use our visualizer!
-            PathVisualizer(path: map.nodes)
+            PathVisualizer(path: map.nodes, checkpoints: [])
                 .frame(height: 300)
                 .padding(.horizontal)
+            
+            // ACTION BUTTONS
+            Button(action: {
+                // START NAVIGATION
+                navManager.startNavigation(with: map.nodes)
+                router.navigate(to: .recording)
+            }) {
+                HStack {
+                    Image(systemName: "location.fill")
+                    Text("Start Navigation")
+                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(Color.green)
+                .cornerRadius(12)
+            }
+            .padding(.horizontal)
+            .padding(.top)
             
             // Stats
             ScrollView {

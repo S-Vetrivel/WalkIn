@@ -6,15 +6,15 @@ struct RecordingView: View {
     
     @State private var showingSaveAlert = false
     @State private var mapName = ""
-    
     @State private var showInstructions = true
+    @State private var show3DView = false // Added view toggle state
     
     func saveMap() {
         let name = mapName.isEmpty ? "Untitled Map" : mapName
         _ = MapStorageService.shared.saveMap(
             name: name,
             nodes: nav.path,
-            totalSteps: nav.steps,
+            totalSteps: nav.checkpointsCrossed,
             startTime: nav.startTime ?? Date() // We need to track start time in NavManager
         )
     }
@@ -36,121 +36,81 @@ struct RecordingView: View {
     
     var body: some View {
         ZStack {
-            // LAYER 1: CAMERA FEED
-            if let session = nav.visionService.captureSession {
-                CameraPreview(session: session).ignoresSafeArea()
-            } else {
-                Color.black.ignoresSafeArea()
-                Text("Starting Camera...")
-                    .foregroundColor(.white)
-            }
+            // LAYER 1: AR WORLD (Main View)
+            ARViewContainer(path: nav.path)
+                .edgesIgnoringSafeArea(.all)
             
             // LAYER 2: DASHBOARD UI
             VStack(spacing: 15) {
                 Spacer().frame(height: 50)
                 
-                // MARK: - 👁️ OCR TEXT BOX
-                // Shows Room Numbers, Exit Signs, Text
-                HStack {
-                    Image(systemName: "text.viewfinder")
-                        .font(.title2)
-                        .foregroundColor(.cyan)
-                    
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("READING TEXT")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.cyan)
-                        
-                        Text(detectedText)
-                            .font(.system(.body, design: .monospaced))
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                            .id("TEXT-" + detectedText) // Triggers animation
-                    }
-                    Spacer()
+                // MARK: - 👁️ OCR/Object Status
+                if !detectedText.isEmpty && detectedText != "..." {
+                    InfoPill(icon: "text.viewfinder", color: .cyan, title: "TEXT", text: detectedText)
                 }
-                .padding()
-                .background(.ultraThinMaterial)
-                .cornerRadius(16)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(Color.cyan.opacity(0.5), lineWidth: 1)
-                )
-                .padding(.horizontal)
                 
-                // MARK: - 🧠 OBJECT DETECTION BOX
-                // Shows "Door", "Monitor", "Chair"
-                HStack {
-                    Image(systemName: "cube.transparent")
-                        .font(.title2)
-                        .foregroundColor(.yellow)
-                    
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("DETECTING OBJECT")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.yellow)
-                        
-                        Text(detectedObject)
-                            .font(.system(.body, design: .monospaced))
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                            .id("OBJ-" + detectedObject)
-                    }
-                    Spacer()
+                if !detectedObject.isEmpty && detectedObject != "Scanning..." {
+                    InfoPill(icon: "cube.transparent", color: .yellow, title: "OBJECT", text: detectedObject)
                 }
-                .padding()
-                .background(.ultraThinMaterial)
-                .cornerRadius(16)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(Color.yellow.opacity(0.5), lineWidth: 1)
-                )
-                .padding(.horizontal)
                 
                 Spacer()
                 
-                // MARK: - 🗺️ REAL-TIME MAP (Minimap)
-                if !nav.path.isEmpty {
-                    PathVisualizer(path: nav.path) // Use the new component
-                        .frame(height: 200)
-                        .padding(.horizontal)
-                        .transition(.opacity)
-                }
-                
                 // MARK: - SENSOR DASHBOARD (Bottom)
-                VStack(spacing: 25) {
-                    // Activity Pill
-                    Text(nav.activityStatus)
-                        .font(.headline)
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 20)
-                        .background(nav.activityStatus.contains("Walking") ? Color.green : Color.gray.opacity(0.3))
-                        .cornerRadius(20)
-                        .foregroundColor(.white)
-                        .animation(.spring(), value: nav.activityStatus)
+                VStack(spacing: 20) {
                     
-                    // Large Steps
-                    VStack(spacing: 0) {
-                        Text("\(nav.steps)")
-                            .font(.system(size: 70, weight: .bold, design: .rounded))
-                            .foregroundColor(.white)
-                            .shadow(color: .black.opacity(0.2), radius: 5)
-                        Text("STEPS TAKEN")
-                            .font(.caption2)
-                            .fontWeight(.black)
-                            .foregroundColor(.white.opacity(0.7))
+                    // AR Status
+                    Text(nav.arManager.statusMessage)
+                        .font(.caption)
+                        .padding(8)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
+                    
+                    // Large Checkpoint Counter
+                    if nav.mode == .navigating {
+                        VStack(spacing: 0) {
+                            Text(String(format: "%.1f m", nav.distanceToNextNode))
+                                .font(.system(size: 70, weight: .bold, design: .rounded))
+                                .foregroundColor(.green)
+                                .shadow(color: .black.opacity(0.2), radius: 5)
+                            Text("DIST TO NEXT")
+                                .font(.caption2)
+                                .fontWeight(.black)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            Text("\(nav.checkpointsCrossed)")
+                                .font(.system(size: 70, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+                                .shadow(color: .black.opacity(0.2), radius: 5)
+                            Text("ANCHORS PLACED")
+                                .font(.caption2)
+                                .fontWeight(.black)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                     }
                     
                     // Stats Row
                     HStack(spacing: 40) {
                         DataWidget(icon: "arrow.up.and.down", value: String(format: "%.1f m", nav.floorLevel), label: "ELEV")
                             .foregroundColor(.green)
-                        DataWidget(icon: "safari", value: "\(Int(nav.heading))°", label: "HEAD")
-                            .foregroundColor(.red)
+                        
+                        // Show raw coordinate for debugging?
+                        DataWidget(icon: "mappin.and.ellipse", value: "\(nav.path.count)", label: "NODES")
+                            .foregroundColor(.orange)
+                    }
+                    
+                    // Manual Drop Button (Optional)
+                    Button(action: {
+                        nav.placeAnchor()
+                    }) {
+                        Label("Drop Anchor", systemImage: "mappin")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 20)
+                            .background(Color.white.opacity(0.2))
+                            .cornerRadius(12)
                     }
                 }
                 .padding(25)
@@ -162,9 +122,15 @@ struct RecordingView: View {
                 // STOP BUTTON
                 Button(action: {
                     nav.stopTracking()
-                    showingSaveAlert = true
+                    if nav.mode == .navigating {
+                        // Just exit
+                        router.navigate(to: .home)
+                    } else {
+                        // Recording: Prompt to save
+                        showingSaveAlert = true
+                    }
                 }) {
-                    Text("FINISH PATH")
+                    Text(nav.mode == .navigating ? "EXIT NAVIGATION" : "FINISH PATH")
                         .fontWeight(.bold)
                         .frame(maxWidth: .infinity)
                         .padding()
@@ -186,7 +152,7 @@ struct RecordingView: View {
                     }
                     Button("Cancel", role: .cancel) {
                         // Do nothing, resume
-                         nav.startTracking()
+                         nav.startRecording()
                     }
                 } message: {
                     Text("Name your journey to save it.")
@@ -198,26 +164,26 @@ struct RecordingView: View {
                 Color.black.opacity(0.8).ignoresSafeArea()
                 
                 VStack(spacing: 20) {
-                    Image(systemName: "map.circle.fill")
+                    Image(systemName: "arkit")
                         .font(.system(size: 60))
                         .foregroundColor(.blue)
                     
-                    Text("Start Mapping")
+                    Text("Start AR Mapping")
                         .font(.title)
                         .bold()
-                        .foregroundColor(.primary)
+                        .foregroundColor(.white)
                     
                     VStack(alignment: .leading, spacing: 15) {
-                        InstructionRow(icon: "figure.walk", text: "Walk steadily. The app counts steps.")
-                        InstructionRow(icon: "dot.radiowaves.left.and.right", text: "Scan rooms slowly to detect objects.")
-                        InstructionRow(icon: "text.viewfinder", text: "Point at signs to read room numbers.")
+                        InstructionRow(icon: "camera.fill", text: "Keep camera pointed forward.")
+                        InstructionRow(icon: "figure.walk", text: "Walk slowly to drop 'breadcrumbs'.")
+                        InstructionRow(icon: "lightbulb.fill", text: "Ensure good lighting for AR to work.")
                     }
                     .padding()
                     
                     Button("I'm Ready") {
                         withAnimation {
                             showInstructions = false
-                            nav.startTracking()
+                            nav.startRecording()
                         }
                     }
                     .font(.headline)
@@ -234,6 +200,44 @@ struct RecordingView: View {
                 .transition(.scale)
             }
         }
+    }
+}
+
+// Helper View for Info Pills
+struct InfoPill: View {
+    let icon: String
+    let color: Color
+    let title: String
+    let text: String
+    
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(color)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption2)
+                    .fontWeight(.bold)
+                    .foregroundColor(color)
+                
+                Text(text)
+                    .font(.system(.body, design: .monospaced))
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+            }
+            Spacer()
+        }
+        .padding()
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(color.opacity(0.5), lineWidth: 1)
+        )
+        .padding(.horizontal)
     }
 }
 

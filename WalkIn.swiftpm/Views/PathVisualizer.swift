@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PathVisualizer: View {
     let path: [PathNode]
+    let checkpoints: [CGPoint]
     
     var body: some View {
         Canvas { context, size in
@@ -11,31 +12,9 @@ struct PathVisualizer: View {
             var minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0
             var points: [CGPoint] = []
             
-            var currentX = 0.0
-            var currentY = 0.0
-            points.append(CGPoint(x: 0, y: 0))
-            
-            // Convert Steps + Heading to X,Y
-            // We assume 1 step ~= 0.7 meters
-            let stepLength = 0.7
-            
-            for i in 1..<path.count {
-                let node = path[i]
-                let prevNode = path[i-1]
-                let stepDiff = Double(node.stepCount - prevNode.stepCount)
-                
-                // Angle in radians (Education standard: 0 is East, but for Map usually 0 is North)
-                // Let's assume standard math: 0 East. Compass Heading 0 is North.
-                // Compass 0 -> Math 90 (pi/2)
-                // Compass 90 -> Math 0
-                // MathAngle = (90 - compass) * pi / 180
-                let angle = (90.0 - node.heading) * .pi / 180.0
-                
-                let dx = cos(angle) * stepDiff * stepLength
-                let dy = -sin(angle) * stepDiff * stepLength // Y is flipped in screens
-                
-                currentX += dx
-                currentY += dy
+            for node in path {
+                let currentX = Double(node.position.x)
+                let currentY = Double(node.position.z) // Top-down view uses Z for Y axis
                 
                 points.append(CGPoint(x: currentX, y: currentY))
                 
@@ -94,6 +73,22 @@ struct PathVisualizer: View {
                 let screenLast = CGPoint(x: Double(last.x) * scale + offsetX, y: Double(last.y) * scale + offsetY)
                 let currentPos = Path(ellipseIn: CGRect(x: screenLast.x - 6, y: screenLast.y - 6, width: 12, height: 12))
                 context.fill(currentPos, with: .color(.red))
+            }
+            
+            // 6. Draw Checkpoints (Waypoints)
+            for checkpoint in checkpoints {
+                let screenCheckpoint = CGPoint(
+                    x: Double(checkpoint.x) * scale + offsetX,
+                    y: Double(checkpoint.y) * scale + offsetY
+                )
+                
+                // Outer Circle (White border)
+                let outerCircle = Path(ellipseIn: CGRect(x: screenCheckpoint.x - 8, y: screenCheckpoint.y - 8, width: 16, height: 16))
+                context.stroke(outerCircle, with: .color(.white), lineWidth: 2)
+                
+                // Inner Circle (Yellow fill)
+                let innerCircle = Path(ellipseIn: CGRect(x: screenCheckpoint.x - 6, y: screenCheckpoint.y - 6, width: 12, height: 12))
+                context.fill(innerCircle, with: .color(.yellow))
             }
         }
         .background(Color.black.opacity(0.8))

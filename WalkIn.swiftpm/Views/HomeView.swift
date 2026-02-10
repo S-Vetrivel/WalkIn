@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @EnvironmentObject var router: WalkInRouter
+    @EnvironmentObject var navManager: NavigationManager
     
     var body: some View {
         VStack(spacing: 20) {
@@ -16,6 +17,7 @@ struct HomeView: View {
             
             Button(action: {
                 // COMMAND: Switch to Recording
+                navManager.startRecording()
                 router.navigate(to: .recording)
             }) {
                 HStack {

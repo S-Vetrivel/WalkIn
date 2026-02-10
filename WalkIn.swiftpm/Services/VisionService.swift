@@ -51,6 +51,23 @@ class VisionService: NSObject, ObservableObject {
         Task.detached {
             print("🚀 STARTING YOLO SETUP...")
             
+            // DEBUG: List all files in bundles to find the model
+            let bundles = [Bundle.main, Bundle(for: VisionService.self)]
+            for (index, bundle) in bundles.enumerated() {
+                print("📦 Scanning Bundle \(index): \(bundle.bundlePath)")
+                if let resourcePath = bundle.resourcePath {
+                    do {
+                        let files = try FileManager.default.contentsOfDirectory(atPath: resourcePath)
+                        print("   Found \(files.count) files. Listing .mlmodel files:")
+                        for file in files where file.hasSuffix("mlmodel") || file.hasSuffix("mlmodelc") {
+                             print("      - \(file)")
+                        }
+                    } catch {
+                        print("   Error scanning resource path: \(error)")
+                    }
+                }
+            }
+            
             // 1. Try finding it in the Main Bundle
             var foundURL = Bundle.main.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel")
             

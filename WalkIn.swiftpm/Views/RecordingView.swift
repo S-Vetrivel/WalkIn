@@ -200,7 +200,7 @@ struct RecordingView: View {
             }
             
             // LAYER 3: INSTRUCTIONS OVERLAY
-            if showInstructions {
+            if showInstructions && nav.mode == .recording {
                 Color.black.opacity(0.8).ignoresSafeArea()
                 
                 VStack(spacing: 20) {
@@ -238,6 +238,35 @@ struct RecordingView: View {
                 .cornerRadius(20)
                 .padding(30)
                 .transition(.scale)
+            }
+            
+            // LAYER 4: NAVIGATION STARTUP OVERLAY
+            if nav.mode == .startingNavigation {
+                 Color.black.opacity(0.8).ignoresSafeArea()
+                 
+                 VStack(spacing: 20) {
+                     ProgressView()
+                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                         .scaleEffect(2)
+                     
+                     Text("Aligning to Start...")
+                         .font(.title2)
+                         .bold()
+                         .foregroundColor(.white)
+                     
+                     Text("Please stand at the exact starting point of the path and look forward.")
+                         .font(.body)
+                         .multilineTextAlignment(.center)
+                         .foregroundColor(.white.opacity(0.8))
+                         .padding(.horizontal)
+                     
+                     Text("Wait for tracking to stabilize.")
+                         .font(.caption)
+                         .foregroundColor(.gray)
+                 }
+                 .padding(40)
+                 .background(.ultraThinMaterial)
+                 .cornerRadius(20)
             }
         }
     }

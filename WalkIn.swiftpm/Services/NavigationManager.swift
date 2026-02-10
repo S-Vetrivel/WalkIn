@@ -19,7 +19,7 @@ class NavigationManager: ObservableObject {
     
     // Mode Management
     enum SessionMode {
-        case idle, recording, navigating
+        case idle, recording, startingNavigation, navigating
     }
     @Published var mode: SessionMode = .idle
     
@@ -53,23 +53,13 @@ class NavigationManager: ObservableObject {
     @Published var startTime: Date?
     
     // MARK: - Startup
-    func startRecording() {
-        guard mode == .idle else { return }
-        print("🚀 Starting Recording Session...")
-        
-        // Reset state
-        self.mode = .recording
-        self.resetSessionData()
-        
-        checkAuthorizationAndStart()
-    }
-    
     func startNavigation(with savedPath: [PathNode]) {
         guard mode == .idle else { return }
         print("🚀 Starting Navigation Session...")
         
         // Load path
-        self.mode = .navigating
+        // We start in 'startingNavigation' to allow AR to stabilize
+        self.mode = .startingNavigation 
         self.path = savedPath
         self.targetNodeIndex = 0
         
@@ -80,6 +70,17 @@ class NavigationManager: ObservableObject {
         checkAuthorizationAndStart()
     }
     
+    func startRecording() {
+        guard mode == .idle else { return }
+        print("🚀 Starting Recording Session...")
+        
+        // Reset state
+        self.mode = .recording
+        self.resetSessionData()
+        
+        checkAuthorizationAndStart()
+    }
+
     private func resetSessionData() {
         self.checkpointsCrossed = 0
         self.checkpoints = []
@@ -152,8 +153,6 @@ class NavigationManager: ObservableObject {
         }
     }
     
-    // Helper to keep the update logic clean
-
     // MARK: - AR Processing
     private func processARFrame(_ frame: ARFrame?) {
         guard let frame = frame, isTracking else { return }
@@ -165,15 +164,23 @@ class NavigationManager: ObservableObject {
         // Update 3D position for UI/SceneKit
         self.position3D = (position.x, position.y, position.z)
         
-        // Update Heading from ARKit (or compass if preferred)
-        // ARKit tracking is usually more stable than raw compass
-        // extraction of yaw from transform is possible but simple compass might suffice for UI
-        
-        // Distance check for checkpoints
-        if mode == .recording {
+        // HANDLE MODES
+        switch mode {
+        case .recording:
             checkForCheckpointCrossing(currentPos: position)
-        } else if mode == .navigating {
-             updateNavigationGuidance(currentPos: position)
+            
+        case .startingNavigation:
+            // Wait for tracking to stabilize
+            if arManager.trackingState == .normal {
+                print("✅ Tracking Stabilized. Beginning Navigation.")
+                self.mode = .navigating
+            }
+            
+        case .navigating:
+            updateNavigationGuidance(currentPos: position)
+            
+        case .idle:
+            break
         }
     }
     

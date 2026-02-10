@@ -46,53 +46,56 @@ class VisionService: NSObject, ObservableObject {
         }
     }
     
-    // 🔥 SMART LOADER: Searches everywhere for the file
+    // 🔥 SMART LOADER: Handles raw model loading to bypass build system conflicts
     private func setupYOLO() {
         Task.detached {
             print("🚀 STARTING YOLO SETUP...")
             
-            // DEBUG: List all files in bundles to find the model
-            let bundles = [Bundle.main, Bundle(for: VisionService.self)]
-            for (index, bundle) in bundles.enumerated() {
-                print("📦 Scanning Bundle \(index): \(bundle.bundlePath)")
-                if let resourcePath = bundle.resourcePath {
-                    do {
-                        let files = try FileManager.default.contentsOfDirectory(atPath: resourcePath)
-                        print("   Found \(files.count) files. Listing .mlmodel files:")
-                        for file in files where file.hasSuffix("mlmodel") || file.hasSuffix("mlmodelc") {
-                             print("      - \(file)")
-                        }
-                    } catch {
-                        print("   Error scanning resource path: \(error)")
-                    }
-                }
-            }
+            // 1. Search for the raw model file
+            var foundURL: URL?
+            let filename = "YOLOv3TinyInt8LUT"
+            let ext = "mlmodel_raw"
             
-            // 1. Try finding it in the Main Bundle
-            var foundURL = Bundle.main.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel")
-            
-            // 2. If not found, try the "Class Bundle" (This is where Playground files usually live)
-            if foundURL == nil {
-                let classBundle = Bundle(for: VisionService.self)
-                foundURL = classBundle.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel")
-            }
-            
-            // 3. If STILL not found, check inside the "Resources" subdirectory explicitly
-            if foundURL == nil {
-                foundURL = Bundle.main.url(forResource: "YOLOv3TinyInt8LUT", withExtension: "mlmodel", subdirectory: "Resources")
-            }
-            
-            guard let modelURL = foundURL else {
-                print("❌ CRITICAL ERROR: Could not find 'YOLOv3TinyInt8LUT.mlmodel' anywhere.")
-                print("👉 FIX: Make sure you created a folder named 'Resources' and put the file inside.")
+            // detailed logging to find where the resource is
+             let bundles = [Bundle.main, Bundle(for: VisionService.self)]
+             for (index, bundle) in bundles.enumerated() {
+                 print("📦 Scanning Bundle \(index): \(bundle.bundlePath)")
+                 if let url = bundle.url(forResource: filename, withExtension: ext) {
+                     print("   ✅ Found in root of bundle!")
+                     foundURL = url
+                     break
+                 }
+                 if let url = bundle.url(forResource: filename, withExtension: ext, subdirectory: "Resources") {
+                     print("   ✅ Found in Resources subdirectory!")
+                     foundURL = url
+                     break
+                 }
+             }
+
+            guard let sourceURL = foundURL else {
+                print("❌ CRITICAL ERROR: Could not find '\(filename).\(ext)' anywhere.")
                 return
             }
             
-            print("✅ Found Model File at: \(modelURL.path)")
+            print("✅ Found Raw Model File at: \(sourceURL.path)")
             
             do {
+                // 2. Copy to a temporary location with correct extension (.mlmodel)
+                let fileManager = FileManager.default
+                let tempDirectory = fileManager.temporaryDirectory
+                let tempModelURL = tempDirectory.appendingPathComponent("YOLOv3TinyInt8LUT.mlmodel")
+                
+                // Remove existing file if present
+                if fileManager.fileExists(atPath: tempModelURL.path) {
+                    try fileManager.removeItem(at: tempModelURL)
+                }
+                
+                try fileManager.copyItem(at: sourceURL, to: tempModelURL)
+                print("📋 Copied to temp: \(tempModelURL.path)")
+
+                // 3. Compile the model
                 print("🔨 Compiling Model...")
-                let compiledURL = try MLModel.compileModel(at: modelURL)
+                let compiledURL = try MLModel.compileModel(at: tempModelURL)
                 
                 print("🧠 Loading CoreML Model...")
                 let model = try MLModel(contentsOf: compiledURL)

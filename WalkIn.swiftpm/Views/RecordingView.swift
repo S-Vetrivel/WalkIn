@@ -37,21 +37,61 @@ struct RecordingView: View {
     var body: some View {
         ZStack {
             // LAYER 1: AR WORLD (Main View)
-            ARViewContainer(path: nav.path)
+            // LAYER 1: AR WORLD (Main View)
+            ARViewContainer(path: nav.path, targetNodeIndex: nav.targetNodeIndex, mode: nav.mode)
                 .edgesIgnoringSafeArea(.all)
             
             // LAYER 2: DASHBOARD UI
             VStack(spacing: 15) {
-                Spacer().frame(height: 50)
+
                 
-                // MARK: - 👁️ OCR/Object Status
-                if !detectedText.isEmpty && detectedText != "..." {
-                    InfoPill(icon: "text.viewfinder", color: .cyan, title: "TEXT", text: detectedText)
+                // MARK: - TOP HUD
+                HStack(alignment: .top) {
+                    // LEFT: OCR/AI Status
+                    VStack(alignment: .leading, spacing: 10) {
+                        if !detectedText.isEmpty && detectedText != "..." {
+                            InfoPill(icon: "text.viewfinder", color: .cyan, title: "TEXT", text: detectedText)
+                        }
+                        
+                        if !detectedObject.isEmpty && detectedObject != "Scanning..." {
+                            InfoPill(icon: "cube.transparent", color: .yellow, title: "OBJECT", text: detectedObject)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // RIGHT: Mini Map
+                    if !nav.path.isEmpty {
+                        VStack(spacing: 8) {
+                            Group {
+                                if show3DView {
+                                    Scene3DView(path: nav.path, checkpoints: [])
+                                } else {
+                                    PathVisualizer(path: nav.path, checkpoints: [])
+                                }
+                            }
+                            .frame(width: 140, height: 180)
+                            .cornerRadius(12)
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.3), lineWidth: 1))
+                            
+                            Button(action: { withAnimation { show3DView.toggle() } }) {
+                                Text(show3DView ? "SWITCH TO 2D" : "SWITCH TO 3D")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.blue)
+                                    .cornerRadius(8)
+                            }
+                        }
+                        .padding(8)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(16)
+                    }
                 }
-                
-                if !detectedObject.isEmpty && detectedObject != "Scanning..." {
-                    InfoPill(icon: "cube.transparent", color: .yellow, title: "OBJECT", text: detectedObject)
-                }
+                .padding(.top, 50)
+                .padding(.horizontal)
                 
                 Spacer()
                 

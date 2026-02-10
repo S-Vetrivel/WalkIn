@@ -105,8 +105,7 @@ class VisionService: NSObject, ObservableObject {
                     self?.handleYOLO(request: request)
                 }
                 
-                request.imageCropAndScaleOption = VNImageCropAndScaleOption.scaleFill
-                self.yoloRequest = request
+request.imageCropAndScaleOption = VNImageCropAndScaleOption.centerCrop                self.yoloRequest = request
                 print("🎉 YOLO MODEL FULLY LOADED & READY!")
                 
             } catch {

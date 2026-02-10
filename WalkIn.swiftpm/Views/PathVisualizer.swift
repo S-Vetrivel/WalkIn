@@ -3,6 +3,7 @@ import SwiftUI
 struct PathVisualizer: View {
     let path: [PathNode]
     let checkpoints: [CGPoint]
+    var userPosition: (x: Float, y: Float, z: Float)? = nil // Add user position
     
     var body: some View {
         Canvas { context, size in
@@ -22,6 +23,16 @@ struct PathVisualizer: View {
                 maxX = max(maxX, currentX)
                 minY = min(minY, currentY)
                 maxY = max(maxY, currentY)
+            }
+            
+            // Include user position in bounds if available
+            if let userPos = userPosition {
+                let uX = Double(userPos.x)
+                let uY = Double(userPos.z)
+                minX = min(minX, uX)
+                maxX = max(maxX, uX)
+                minY = min(minY, uY)
+                maxY = max(maxY, uY)
             }
             
             // 2. Scale to Fit
@@ -68,14 +79,7 @@ struct PathVisualizer: View {
                 }
             }
             
-            // 5. Draw Current Position (Last Point)
-            if let last = points.last {
-                let screenLast = CGPoint(x: Double(last.x) * scale + offsetX, y: Double(last.y) * scale + offsetY)
-                let currentPos = Path(ellipseIn: CGRect(x: screenLast.x - 6, y: screenLast.y - 6, width: 12, height: 12))
-                context.fill(currentPos, with: .color(.red))
-            }
-            
-            // 6. Draw Checkpoints (Waypoints)
+            // 5. Draw Checkpoints (Waypoints)
             for checkpoint in checkpoints {
                 let screenCheckpoint = CGPoint(
                     x: Double(checkpoint.x) * scale + offsetX,
@@ -90,6 +94,20 @@ struct PathVisualizer: View {
                 let innerCircle = Path(ellipseIn: CGRect(x: screenCheckpoint.x - 6, y: screenCheckpoint.y - 6, width: 12, height: 12))
                 context.fill(innerCircle, with: .color(.yellow))
             }
+             
+             // 6. Draw User Position (Real-time)
+             if let userPos = userPosition {
+                 let uX = Double(userPos.x)
+                 let uY = Double(userPos.z)
+                 let screenUser = CGPoint(x: uX * scale + offsetX, y: uY * scale + offsetY)
+                 
+                 // Pulsing effect simulation (static here, but could accept a time param)
+                 let userDot = Path(ellipseIn: CGRect(x: screenUser.x - 6, y: screenUser.y - 6, width: 12, height: 12))
+                 context.fill(userDot, with: .color(.red))
+                 
+                 let userRing = Path(ellipseIn: CGRect(x: screenUser.x - 10, y: screenUser.y - 10, width: 20, height: 20))
+                 context.stroke(userRing, with: .color(.red.opacity(0.5)), lineWidth: 2)
+             }
         }
         .background(Color.black.opacity(0.8))
         .cornerRadius(12)

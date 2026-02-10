@@ -4,6 +4,7 @@ import Combine
 import ARKit
 import simd
 import UIKit // For UIImage
+@preconcurrency import Vision
 
 
 @MainActor
@@ -31,7 +32,12 @@ class NavigationManager: ObservableObject {
     
     // Alignment
     @Published var alignmentScore: Float = 0.0
-    private var targetFeaturePrint: VNFeaturePrintObservation?
+    @Published var worldOffset: simd_float4x4 = matrix_identity_float4x4
+    
+    // Feature Print Cache (Optimization)
+    private var nodeFeaturePrints: [UUID: VNFeaturePrintObservation] = [:]
+    private var isRelocalizing: Bool = false
+    private var lastRelocalizationTime: Date = Date.distantPast
     
     // Checkpoint System
     
@@ -71,14 +77,11 @@ class NavigationManager: ObservableObject {
         self.path = savedPath
         self.targetNodeIndex = 0
         self.alignmentScore = 0.0
+        self.worldOffset = matrix_identity_float4x4
+        self.nodeFeaturePrints = [:] // Clear cache
         
         // Prepare Target Feature Print for Alignment (First Node)
-        if let firstNode = savedPath.first, let imagePath = firstNode.image {
-            if let image = ImageLocalizationService.shared.loadUIImage(filename: imagePath) {
-                self.targetFeaturePrint = ImageLocalizationService.shared.generateFeaturePrint(for: image)
-                print("🎯 Target Feature Print Loaded")
-            }
-        }
+        // We now do this dynamically in attemptRelocalization
         
         // Don't reset path, but reset other sensors
         self.checkpointsCrossed = 0
@@ -179,66 +182,153 @@ class NavigationManager: ObservableObject {
         let position = transform.columns.3
         
         // Update 3D position for UI/SceneKit
-        self.position3D = (position.x, position.y, position.z)
+        // We want the position in MAP SPACE for the 3D minimap.
+        // Current = Offset * Map
+        // Map = Inverse(Offset) * Current
+        let inverseOffset = worldOffset.inverse
+        let mapPos = inverseOffset * position
+        self.position3D = (mapPos.x, mapPos.y, mapPos.z)
         
         // HANDLE MODES
         switch mode {
         case .recording:
             checkForCheckpointCrossing(currentPos: position)
             
-        case .startingNavigation:
-            // Calculate Alignment Score
-            if let currentFrame = arManager.currentFrame, let targetPrint = self.targetFeaturePrint {
-                // We throttle this? Vision is somewhat expensive. 
-                // But currentFrame updates at 60fps. Maybe run every 10 frames or so?
-                // For now, let's try every frame but async might be better. 
-                // Since this runs on Main Actor, we shouldn't block.
-                // Feature print generation is synchronous in ImageLocalizationService?
-                // Yes, it uses VNImageRequestHandler. It might block.
-                // Let's offload to background task if possible, BUT we are in a sync function.
-                // For a smooth UI, we should probably debounce this.
-                // Let's just do it directly for now, optimization later if stutter occurs.
-                
-                // We need to convert CVPixelBuffer to UIImage for our service
-                // Or update service to take CVPixelBuffer (better).
-                // Let's convert here for now using our previous logic (or a helper).
-                // PERFORMANCE NOTE: This conversion + Vision every frame WILL lag.
-                // PROPOSAL: Only run if alignmentScore is < threshold and maybe every 0.1s.
-                
-                // Quick hack: use a simple counter or timer
-                 
-                 Task {
-                     if let pixelBuffer = currentFrame.capturedImage as CVPixelBuffer? {
-                        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-                        let context = CIContext()
-                        if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
-                            let uiImage = UIImage(cgImage: cgImage)
-                            if let currentPrint = ImageLocalizationService.shared.generateFeaturePrint(for: uiImage) {
-                                let score = ImageLocalizationService.shared.computeSimilarity(between: currentPrint, and: targetPrint)
-                                await MainActor.run {
-                                    self.alignmentScore = score
-                                }
-                            }
-                        }
-                     }
-                 }
-            } else {
-                // No target image? Auto-score 1.0 (skip alignment)
-                self.alignmentScore = 1.0
+        case .startingNavigation, .navigating:
+            // Continuous Relocalization
+            attemptRelocalization(frame: frame)
+            
+            if mode == .navigating {
+                updateNavigationGuidance(currentPos: position)
             }
-            
-            // Wait for tracking to stabilize AND user to confirm (we remove auto-transition)
-            // if arManager.trackingState == .normal { ... }
-            // We now wait for manual "Start" button in UI, or auto-start if score is high?
-            // User requested "enable the user to navigate from a particular spot".
-            // Let's allow manual start but show the score.
-            
-        case .navigating:
-            updateNavigationGuidance(currentPos: position)
             
         case .idle:
             break
         }
+    }
+    
+    // MARK: - Relocalization
+    private func attemptRelocalization(frame: ARFrame) {
+        let now = Date()
+        guard !isRelocalizing, now.timeIntervalSince(lastRelocalizationTime) > 1.0 else { return } // Check every 1s
+        
+        // Candidates:
+        // If starting: search entire path (or first 10)
+        // If navigating: search +/- 5 nodes from target
+        // For simplicity and "jump to any dot" feature: Search ALL nodes? 
+        // If path is long, this is expensive. Let's clamp to 20 nearest nodes?
+        // Or just search all for now (assuming short paths < 50 nodes).
+        
+        isRelocalizing = true
+        
+        let candidates = path // optimize later
+        
+        Task { [weak self] in
+            defer { 
+                Task { @MainActor in self?.isRelocalizing = false; self?.lastRelocalizationTime = Date() }
+            }
+            guard let self = self else { return }
+            
+            // 1. Get Current Feature Print
+            guard let pixelBuffer = frame.capturedImage as CVPixelBuffer?,
+                  let currentPrint = await self.generateFeaturePrint(from: pixelBuffer) 
+            else { return }
+            
+            // 2. Find Best Match
+            var bestMatchNode: PathNode?
+            var bestScore: Float = 0.0
+            
+            for node in candidates {
+                guard let imagePath = node.image else { continue }
+                
+                // Get or Load Feature Print
+                let nodePrint: VNFeaturePrintObservation?
+                if let cached = await self.getNodePrint(for: node.id) {
+                    nodePrint = cached
+                } else {
+                    // Load and cache
+                    if let uiImage = ImageLocalizationService.shared.loadUIImage(filename: imagePath),
+                       let print = ImageLocalizationService.shared.generateFeaturePrint(for: uiImage) {
+                        await self.cacheNodePrint(node.id, print: print)
+                        nodePrint = print
+                    } else {
+                        nodePrint = nil
+                    }
+                }
+                
+                if let nodePrint = nodePrint {
+                    let score = ImageLocalizationService.shared.computeSimilarity(between: currentPrint, and: nodePrint)
+                    if score > bestScore {
+                        bestScore = score
+                        bestMatchNode = node
+                    }
+                }
+            }
+            
+            // 3. Evaluate Match
+            await MainActor.run {
+                self.alignmentScore = bestScore
+                
+                if bestScore > 0.65, let match = bestMatchNode {
+                    print("✅ RELOCALIZED to Node \(match.stepCount) (Score: \(bestScore))")
+                    
+                    // Calculate Correction
+                    // User is at 'match.position' in the MAP, and at 'frame.position' in CURRENT AR.
+                    // We want to shift the MAP so that 'match.position' aligns with 'frame.position'.
+                    // MapOffset = CurrentARPos - SavedMapPos
+                    
+                    let currentARPos = frame.camera.transform.columns.3
+                    let savedMapPos = match.transform.columns.3
+                    
+                    let translation = currentARPos - savedMapPos
+                    
+                    // Construct new offset matrix (Translation only for stability)
+                    var newOffset = matrix_identity_float4x4
+                    newOffset.columns.3 = translation
+                    newOffset.columns.3.w = 1.0
+                    
+                    // Smoothly interpolate? For now, snap.
+                    self.worldOffset = newOffset
+                    
+                    // If we were starting, jump to navigation
+                    if self.mode == .startingNavigation {
+                        self.mode = .navigating
+                        // Update target index to the one AFTER the match
+                        if let matchIdx = self.path.firstIndex(where: { $0.id == match.id }) {
+                            self.targetNodeIndex = min(matchIdx + 1, self.path.count - 1)
+                        }
+                    }
+                    
+                    // If navigating, maybe jump index if we skipped ahead?
+                    if self.mode == .navigating {
+                         if let matchIdx = self.path.firstIndex(where: { $0.id == match.id }) {
+                             // Only jump forward, never back? Or allow back?
+                             // Allow full realignment
+                             self.targetNodeIndex = min(matchIdx + 1, self.path.count - 1)
+                         }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Helper to access Cache safely
+    private func getNodePrint(for id: UUID) async -> VNFeaturePrintObservation? {
+        // Accessing main actor isolated dictionary
+        await MainActor.run { return nodeFeaturePrints[id] }
+    }
+    
+    private func cacheNodePrint(_ id: UUID, print: VNFeaturePrintObservation) async {
+        await MainActor.run { nodeFeaturePrints[id] = print }
+    }
+    
+    private func generateFeaturePrint(from pixelBuffer: CVPixelBuffer) async -> VNFeaturePrintObservation? {
+        // This runs off-main
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+        let uiImage = UIImage(cgImage: cgImage)
+        return ImageLocalizationService.shared.generateFeaturePrint(for: uiImage)
     }
     
     // MARK: - Navigation Guidance

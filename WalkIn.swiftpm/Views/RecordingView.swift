@@ -56,7 +56,7 @@ struct RecordingView: View {
                                 if show3DView {
                                     Scene3DView(path: nav.path, checkpoints: [])
                                 } else {
-                                    PathVisualizer(path: nav.path, checkpoints: [])
+                                    PathVisualizer(path: nav.path, checkpoints: [], userPosition: nav.position3D)
                                 }
                             }
                             .frame(width: 140, height: 180)
@@ -130,16 +130,49 @@ struct RecordingView: View {
                     }
                     
                     // Manual Drop Button (Optional)
-                    Button(action: {
-                        nav.placeAnchor()
-                    }) {
-                        Label("Drop Anchor", systemImage: "mappin")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 20)
-                            .background(Color.white.opacity(0.2))
-                            .cornerRadius(12)
+                    if nav.mode == .navigating {
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text("Next Checkpoint: \(nav.targetNodeIndex)")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                Text(String(format: "Distance: %.1fm", nav.distanceToNextNode))
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
+                            }
+                            Spacer()
+                            
+                            // Alignment Badge
+                            if nav.alignmentScore > 0.6 {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                    Text("Synced")
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.green)
+                                }
+                                .padding(8)
+                                .background(Color.black.opacity(0.6))
+                                .cornerRadius(16)
+                            }
+                        }
+                        .padding()
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(15)
+                        .padding(.horizontal)
+                    } else {
+                        Button(action: {
+                            nav.placeAnchor()
+                        }) {
+                            Label("Drop Anchor", systemImage: "mappin")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .padding(.vertical, 10)
+                                .padding(.horizontal, 20)
+                                .background(Color.white.opacity(0.2))
+                                .cornerRadius(12)
+                        }
                     }
                 }
                 .padding(25)
@@ -215,160 +248,159 @@ struct RecordingView: View {
             }
             
             // LAYER 4: VISUAL ALIGNMENT UI
-            if nav.mode == .startingNavigation {
-                 Color.black.opacity(0.6).ignoresSafeArea()
-                 
-                 VStack(spacing: 20) {
-                     Text("Visual Alignment")
-                         .font(.title2)
-                         .bold()
-                         .foregroundColor(.white)
+                if nav.mode == .startingNavigation {
+                     Color.black.opacity(0.6).ignoresSafeArea()
                      
-                     // Target Image Preview
-                     if let firstNode = nav.path.first, 
-                        let imagePath = firstNode.image,
-                        let uiImage = ImageLocalizationService.shared.loadUIImage(filename: imagePath) {
-                         
-                         VStack {
-                             Text("ALIGN WITH THIS VIEW")
-                                 .font(.caption)
-                                 .fontWeight(.bold)
-                                 .foregroundColor(.yellow)
-                             
-                             Image(uiImage: uiImage)
-                                 .resizable()
-                                 .scaledToFit()
-                                 .frame(height: 200)
-                                 .cornerRadius(12)
-                                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.yellow, lineWidth: 2))
-                         }
-                     } else {
-                         Text("No reference image found. Just start.")
-                             .foregroundColor(.gray)
-                     }
-                     
-                     // Match Score Indicator
-                     VStack {
-                         Text("MATCH SCORE")
-                             .font(.caption2)
-                             .foregroundColor(.white.opacity(0.8))
-                         
-                         HStack {
-                             ProgressView(value: Double(nav.alignmentScore))
-                                 .progressViewStyle(LinearProgressViewStyle(tint: nav.alignmentScore > 0.6 ? .green : .red))
-                                 .frame(height: 8)
-                             Text(String(format: "%.0f%%", nav.alignmentScore * 100))
-                                 .font(.headline)
-                                 .foregroundColor(nav.alignmentScore > 0.6 ? .green : .red)
-                                 .frame(width: 50)
-                         }
-                         .padding(.horizontal)
-                     }
-                     
-                     // Controls
-                     Button(action: {
-                         withAnimation {
-                             nav.mode = .navigating // Start!
-                         }
-                     }) {
-                         HStack {
-                             if nav.alignmentScore > 0.6 {
-                                 Image(systemName: "checkmark.circle.fill")
-                                 Text("START NAVIGATION")
-                             } else {
-                                 Image(systemName: "exclamationmark.triangle.fill")
-                                 Text("FORCE START")
+                     VStack(spacing: 20) {
+                        Text("Visual Alignment")
+                            .font(.title)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                        
+                        Text("Point camera at any recorded node to sync.")
+                            .foregroundColor(.gray)
+                        
+                        // Reference Image
+                         if let firstNode = nav.path.first, let imagePath = firstNode.image,
+                            let image = ImageLocalizationService.shared.loadUIImage(filename: imagePath) {
+                             VStack {
+                                 Text("Reference (Start)")
+                                     .font(.caption)
+                                     .foregroundColor(.white)
+                                 Image(uiImage: image)
+                                     .resizable()
+                                     .scaledToFit()
+                                     .frame(height: 150)
+                                     .cornerRadius(10)
+                                     .overlay(
+                                         RoundedRectangle(cornerRadius: 10)
+                                             .stroke(Color.white, lineWidth: 2)
+                                     )
                              }
                          }
-                         .font(.headline)
-                         .padding()
-                         .frame(maxWidth: .infinity)
-                         .background(nav.alignmentScore > 0.6 ? Color.green : Color.orange)
-                         .foregroundColor(.white)
-                         .cornerRadius(12)
+                         
+                         // Match Score Indicator
+                         VStack {
+                             Text("MATCH SCORE")
+                                 .font(.caption2)
+                                 .foregroundColor(.white.opacity(0.8))
+                             
+                             HStack {
+                                 ProgressView(value: Double(nav.alignmentScore))
+                                     .progressViewStyle(LinearProgressViewStyle(tint: nav.alignmentScore > 0.6 ? .green : .red))
+                                     .frame(height: 8)
+                                 Text(String(format: "%.0f%%", nav.alignmentScore * 100))
+                                     .font(.headline)
+                                     .foregroundColor(nav.alignmentScore > 0.6 ? .green : .red)
+                                     .frame(width: 50)
+                             }
+                             .padding(.horizontal)
+                         }
+                         
+                         // Controls
+                         Button(action: {
+                             withAnimation {
+                                 nav.mode = .navigating // Start!
+                             }
+                         }) {
+                             HStack {
+                                 if nav.alignmentScore > 0.6 {
+                                     Image(systemName: "checkmark.circle.fill")
+                                     Text("START NAVIGATION")
+                                 } else {
+                                     Image(systemName: "exclamationmark.triangle.fill")
+                                     Text("FORCE START")
+                                 }
+                             }
+                             .font(.headline)
+                             .padding()
+                             .frame(maxWidth: .infinity)
+                             .background(nav.alignmentScore > 0.6 ? Color.green : Color.orange)
+                             .foregroundColor(.white)
+                             .cornerRadius(12)
+                         }
+                         .padding(.top)
+                        
+                        Text("Point camera at the start location until score turns green.")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
                      }
-                     .padding(.top)
-                     
-                     Text("Point camera at the start location until score turns green.")
-                         .font(.caption)
-                         .foregroundColor(.white.opacity(0.7))
-                         .multilineTextAlignment(.center)
-                         .padding(.horizontal)
-                 }
-                 .padding(30)
-                 .background(.ultraThinMaterial)
-                 .cornerRadius(24)
-                 .padding(30)
-                 .transition(.scale)
+                     .padding(30)
+                     .background(.ultraThinMaterial)
+                     .cornerRadius(24)
+                     .padding(30)
+                     .transition(.scale)
+                }
             }
         }
     }
-}
-
-// Helper View for Info Pills
-struct InfoPill: View {
-    let icon: String
-    let color: Color
-    let title: String
-    let text: String
     
-    var body: some View {
-        HStack {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundColor(color)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption2)
-                    .fontWeight(.bold)
+    // Helper View for Info Pills
+    struct InfoPill: View {
+        let icon: String
+        let color: Color
+        let title: String
+        let text: String
+        
+        var body: some View {
+            HStack {
+                Image(systemName: icon)
+                    .font(.title2)
                     .foregroundColor(color)
                 
-                Text(text)
-                    .font(.system(.body, design: .monospaced))
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(color)
+                    
+                    Text(text)
+                        .font(.system(.body, design: .monospaced))
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                }
+                Spacer()
             }
-            Spacer()
+            .padding()
+            .background(.ultraThinMaterial)
+            .cornerRadius(16)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(color.opacity(0.5), lineWidth: 1)
+            )
+            .padding(.horizontal)
         }
-        .padding()
-        .background(.ultraThinMaterial)
-        .cornerRadius(16)
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(color.opacity(0.5), lineWidth: 1)
-        )
-        .padding(.horizontal)
     }
-}
-
-struct InstructionRow: View {
-    let icon: String
-    let text: String
     
-    var body: some View {
-        HStack {
-            Image(systemName: icon)
-                .font(.title2)
-                .frame(width: 30)
-                .foregroundColor(.blue)
-            Text(text)
-                .font(.body)
-                .foregroundColor(.primary)
-            Spacer()
+    struct InstructionRow: View {
+        let icon: String
+        let text: String
+        
+        var body: some View {
+            HStack {
+                Image(systemName: icon)
+                    .font(.title2)
+                    .frame(width: 30)
+                    .foregroundColor(.blue)
+                Text(text)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                Spacer()
+            }
         }
     }
-}
-
-// Reusable Widget
-struct DataWidget: View {
-    let icon: String, value: String, label: String
-    var body: some View {
-        VStack {
-            Image(systemName: icon).font(.title3)
-            Text(value).font(.title3).bold().monospaced()
-            Text(label).font(.caption2).opacity(0.7)
+    
+    // Reusable Widget
+    struct DataWidget: View {
+        let icon: String, value: String, label: String
+        var body: some View {
+            VStack {
+                Image(systemName: icon).font(.title3)
+                Text(value).font(.title3).bold().monospaced()
+                Text(label).font(.caption2).opacity(0.7)
+            }
         }
-    }
-}
+        }

@@ -4,6 +4,21 @@ struct RecordingView: View {
     @EnvironmentObject var nav: NavigationManager
     @EnvironmentObject var router: WalkInRouter
     
+    @State private var showingSaveAlert = false
+    @State private var mapName = ""
+    
+    @State private var showInstructions = true
+    
+    func saveMap() {
+        let name = mapName.isEmpty ? "Untitled Map" : mapName
+        _ = MapStorageService.shared.saveMap(
+            name: name,
+            nodes: nav.path,
+            totalSteps: nav.steps,
+            startTime: nav.startTime ?? Date() // We need to track start time in NavManager
+        )
+    }
+    
     // Separate State for smoother animations
     var detectedText: String {
         if nav.currentAIReadout.starts(with: "TEXT:") {
@@ -98,6 +113,14 @@ struct RecordingView: View {
                 
                 Spacer()
                 
+                // MARK: - 🗺️ REAL-TIME MAP (Minimap)
+                if !nav.path.isEmpty {
+                    PathVisualizer(path: nav.path) // Use the new component
+                        .frame(height: 200)
+                        .padding(.horizontal)
+                        .transition(.opacity)
+                }
+                
                 // MARK: - SENSOR DASHBOARD (Bottom)
                 VStack(spacing: 25) {
                     // Activity Pill
@@ -138,9 +161,8 @@ struct RecordingView: View {
                 
                 // STOP BUTTON
                 Button(action: {
-                    print(nav.generateJourneySummary())
                     nav.stopTracking()
-                    router.navigate(to: .home)
+                    showingSaveAlert = true
                 }) {
                     Text("FINISH PATH")
                         .fontWeight(.bold)
@@ -153,10 +175,82 @@ struct RecordingView: View {
                 }
                 .padding(.horizontal, 30)
                 .padding(.bottom, 30)
+                .alert("Save Map", isPresented: $showingSaveAlert) {
+                    TextField("Map Name", text: $mapName)
+                    Button("Save") {
+                        saveMap()
+                        router.navigate(to: .home)
+                    }
+                    Button("Discard", role: .destructive) {
+                        router.navigate(to: .home)
+                    }
+                    Button("Cancel", role: .cancel) {
+                        // Do nothing, resume
+                         nav.startTracking()
+                    }
+                } message: {
+                    Text("Name your journey to save it.")
+                }
+            }
+            
+            // LAYER 3: INSTRUCTIONS OVERLAY
+            if showInstructions {
+                Color.black.opacity(0.8).ignoresSafeArea()
+                
+                VStack(spacing: 20) {
+                    Image(systemName: "map.circle.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.blue)
+                    
+                    Text("Start Mapping")
+                        .font(.title)
+                        .bold()
+                        .foregroundColor(.primary)
+                    
+                    VStack(alignment: .leading, spacing: 15) {
+                        InstructionRow(icon: "figure.walk", text: "Walk steadily. The app counts steps.")
+                        InstructionRow(icon: "dot.radiowaves.left.and.right", text: "Scan rooms slowly to detect objects.")
+                        InstructionRow(icon: "text.viewfinder", text: "Point at signs to read room numbers.")
+                    }
+                    .padding()
+                    
+                    Button("I'm Ready") {
+                        withAnimation {
+                            showInstructions = false
+                            nav.startTracking()
+                        }
+                    }
+                    .font(.headline)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                }
+                .padding(30)
+                .background(Color(UIColor.systemGray6))
+                .cornerRadius(20)
+                .padding(30)
+                .transition(.scale)
             }
         }
-        .onAppear {
-            nav.startTracking()
+    }
+}
+
+struct InstructionRow: View {
+    let icon: String
+    let text: String
+    
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .font(.title2)
+                .frame(width: 30)
+                .foregroundColor(.blue)
+            Text(text)
+                .font(.body)
+                .foregroundColor(.primary)
+            Spacer()
         }
     }
 }

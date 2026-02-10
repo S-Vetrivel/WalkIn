@@ -27,32 +27,33 @@ class NavigationManager: ObservableObject {
     // Background Polling Task
     private var pollingTask: Task<Void, Never>?
     
+    @Published var startTime: Date?
+    
+    // For accelerometer-based step detection (iPad fallback)
+    private var lastPeakTime: Date = Date()
+    
     // MARK: - Startup
     func startTracking() {
         guard !isTracking else { return }
         print("🚀 Requesting Access...")
+        
+        // Reset state for new session
+        self.steps = 0
+        self.path = []
+        self.startTime = Date()
+        
         checkAuthorizationAndStart()
     }
     
     private func checkAuthorizationAndStart() {
-        let status = CMPedometer.authorizationStatus()
-        switch status {
-        case .authorized:
-            self.permissionStatus = "Authorized"
-            self.activateSensors()
-        case .notDetermined:
-            pedometer.queryPedometerData(from: Date(), to: Date()) { _, _ in
-                Task { @MainActor in self.checkAuthorizationAndStart() }
-            }
-        case .denied, .restricted:
-            self.permissionStatus = "Denied"
-        @unknown default:
-            break
-        }
+        // In iOS Playgrounds, we can just try to start. The OS will prompt.
+        self.permissionStatus = "Requesting..."
+        self.activateSensors()
     }
     
     private func activateSensors() {
         isTracking = true
+        print("🔌 Activating Sensors...")
         visionService.setup(with: self)
         
         // 1. Activity Monitor
@@ -66,22 +67,47 @@ class NavigationManager: ObservableObject {
             }
         }
         
-        // 2. Pedometer (Fixed for Swift 6 Data Races)
-        let startTime = Date()
-        pollingTask = Task {
-            while isTracking {
-                // Sleep for 2 seconds
-                try? await Task.sleep(nanoseconds: 2 * 1_000_000_000)
-                
-                if CMPedometer.isStepCountingAvailable() {
-                    // We use the standard closure instead of async/await to avoid sendability checks
-                    self.pedometer.queryPedometerData(from: startTime, to: Date()) { [weak self] data, error in
-                        guard let data = data else { return }
+        // 2. Pedometer (Reverting to queryPedometerData for iPad environment compatibility)
+        if CMPedometer.isStepCountingAvailable() {
+            let sessionStartTime = Date()
+            pollingTask = Task {
+                while isTracking {
+                    try? await Task.sleep(nanoseconds: 1 * 1_000_000_000) // Poll every 1s
+                    
+                    self.pedometer.queryPedometerData(from: sessionStartTime, to: Date()) { [weak self] data, error in
+                        guard let data = data, let self = self else { return }
                         let count = data.numberOfSteps.intValue
                         
-                        // Hop back to MainActor to update UI safely
                         Task { @MainActor in
-                            self?.updateStepsSafe(count)
+                            self.updateStepsSafe(count)
+                        }
+                    }
+                }
+            }
+        } else {
+            print("⚠️ Pedometer not available. Using Accelerometer Fallback (iPad mode/Simulator)...")
+            // FALLBACK: Manual Step Detection using Accelerometer (For iPad/Simulator)
+            if motionManager.isAccelerometerAvailable {
+                motionManager.accelerometerUpdateInterval = 0.1
+                let threshold: Double = 1.2 // g-force threshold for a step
+                
+                motionManager.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
+                    guard let data = data else { return }
+                    
+                    // Calculate magnitude: sqrt(x^2 + y^2 + z^2)
+                    let magnitude = sqrt(pow(data.acceleration.x, 2) + pow(data.acceleration.y, 2) + pow(data.acceleration.z, 2))
+                    
+                    // Simple peak detection with 0.4s cooldown (debounce)
+                    if magnitude > threshold {
+                        Task { @MainActor in
+                            guard let self = self else { return }
+                            let now = Date()
+                            if now.timeIntervalSince(self.lastPeakTime) > 0.4 {
+                                self.steps += 1
+                                self.updateStepsSafe(self.steps)
+                                self.lastPeakTime = now
+                                print("🏃 Fallback Step detected: \(self.steps)")
+                            }
                         }
                     }
                 }
@@ -104,6 +130,8 @@ class NavigationManager: ObservableObject {
                 guard let data = data else { return }
                 self?.floorLevel = data.relativeAltitude.doubleValue
             }
+        } else {
+            print("⚠️ Altimeter not available")
         }
     }
     
@@ -176,6 +204,7 @@ class NavigationManager: ObservableObject {
         pollingTask = nil
         
         pedometer.stopUpdates()
+        motionManager.stopAccelerometerUpdates()
         motionManager.stopDeviceMotionUpdates()
         activityManager.stopActivityUpdates()
         altimeter.stopRelativeAltitudeUpdates()

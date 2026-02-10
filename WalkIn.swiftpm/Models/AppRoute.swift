@@ -11,4 +11,5 @@ enum AppRoute {
     case home
     case recording
     case history
+    case mapLibrary
 }

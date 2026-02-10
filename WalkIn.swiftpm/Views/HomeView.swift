@@ -29,6 +29,25 @@ struct HomeView: View {
                 .background(Color.blue)
                 .cornerRadius(12)
             }
+
+            .padding(.horizontal)
+            
+            Button(action: {
+                router.navigate(to: .mapLibrary)
+            }) {
+                HStack {
+                    Image(systemName: "folder")
+                    Text("View Saved Maps")
+                }
+                .font(.headline)
+                .foregroundColor(.blue)
+                .padding()
+                .frame(maxWidth: .infinity)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.blue, lineWidth: 2)
+                )
+            }
             .padding(.horizontal)
             
             Spacer()

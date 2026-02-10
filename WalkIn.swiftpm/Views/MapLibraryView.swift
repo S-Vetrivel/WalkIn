@@ -1,0 +1,188 @@
+import SwiftUI
+
+struct MapLibraryView: View {
+    @EnvironmentObject var router: WalkInRouter
+    @State private var savedMaps: [SavedMap] = []
+    @State private var selectedMap: SavedMap? = nil
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Button(action: { router.goHome() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.title2)
+                        .foregroundColor(.blue)
+                }
+                
+                Text("Saved Maps")
+                    .font(.title2)
+                    .bold()
+                    .foregroundColor(.white)
+                
+                Spacer()
+            }
+            .padding()
+            
+            if let map = selectedMap {
+                // Detail View
+                SavedMapView(map: map, onBack: { selectedMap = nil })
+            } else {
+                // List View
+                if savedMaps.isEmpty {
+                    Spacer()
+                    VStack(spacing: 10) {
+                        Image(systemName: "map")
+                            .font(.system(size: 50))
+                            .foregroundColor(.gray)
+                        Text("No maps saved yet.")
+                            .foregroundColor(.gray)
+                        Text("Record a path to see it here.")
+                            .font(.caption)
+                            .foregroundColor(.gray.opacity(0.7))
+                    }
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(savedMaps) { map in
+                                Button(action: { selectedMap = map }) {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(map.name)
+                                                .font(.headline)
+                                                .foregroundColor(.white)
+                                            Text("\(map.totalSteps) steps • \(map.dateString)")
+                                                .font(.caption)
+                                                .foregroundColor(.gray)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                            .foregroundColor(.gray)
+                                    }
+                                    .padding()
+                                    .background(Color.white.opacity(0.1))
+                                    .cornerRadius(12)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            loadMaps()
+        }
+    }
+    
+    private func loadMaps() {
+        savedMaps = MapStorageService.shared.loadMaps()
+    }
+}
+
+// Detail View for a single map
+struct SavedMapView: View {
+    let map: SavedMap
+    var onBack: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button(action: onBack) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                    .foregroundColor(.blue)
+                }
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+            
+            Text(map.name)
+                .font(.title)
+                .bold()
+                .foregroundColor(.white)
+                .padding(.bottom, 8)
+            
+            // Re-use our visualizer!
+            PathVisualizer(path: map.nodes)
+                .frame(height: 300)
+                .padding(.horizontal)
+            
+            // Stats
+            ScrollView {
+                VStack(spacing: 12) {
+                    HStack {
+                        StatCard(title: "Steps", value: "\(map.totalSteps)", icon: "figure.walk")
+                        StatCard(title: "Duration", value: formatDuration(map.duration), icon: "clock")
+                    }
+                    .padding(.horizontal)
+                    
+                    // Landmarks
+                    let landmarks = map.nodes.filter { $0.aiLabel != nil || $0.detectedObject != nil }
+                    if !landmarks.isEmpty {
+                        VStack(alignment: .leading) {
+                            Text("Landmarks Found")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .padding(.horizontal)
+                            
+                            ForEach(landmarks) { node in
+                                HStack {
+                                    if let text = node.aiLabel {
+                                        Image(systemName: "text.viewfinder").foregroundColor(.cyan)
+                                        Text(text).foregroundColor(.white)
+                                    } else if let obj = node.detectedObject {
+                                        Image(systemName: "cube.transparent").foregroundColor(.orange)
+                                        Text(obj).foregroundColor(.white)
+                                    }
+                                    Spacer()
+                                    Text("Step \(node.stepCount)")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                .padding(.horizontal)
+                                .padding(.vertical, 6)
+                            }
+                        }
+                    }
+                }
+                .padding(.top)
+            }
+        }
+    }
+    
+    func formatDuration(_ interval: TimeInterval) -> String {
+        let minutes = Int(interval) / 60
+        let seconds = Int(interval) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+}
+
+struct StatCard: View {
+    let title: String
+    let value: String
+    let icon: String
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(.blue)
+            Text(value)
+                .font(.title3)
+                .bold()
+                .foregroundColor(.white)
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .frame(maxWidth: .infinity)
+        .padding()
+        .background(Color.white.opacity(0.1))
+        .cornerRadius(12)
+    }
+}

@@ -22,6 +22,10 @@ struct ContentView: View {
                 Text("History View (Placeholder)")
                     .foregroundColor(.white)
                     .onTapGesture { router.goHome() }
+                
+            case .mapLibrary:
+                MapLibraryView()
+                    .transition(.opacity)
             }
         }
         .animation(.easeInOut, value: router.currentRoute)

@@ -16,8 +16,8 @@ let package = Package(
         .iOSApplication(
             name: "WalkIn",
             targets: ["AppModule"],
-            bundleIdentifier: "Vetrivel.WalkIn",
-            teamIdentifier: "HZVZU3TQ9J",
+            bundleIdentifier: "V3.WalkIn",
+            teamIdentifier: "S749N6FFP2",
             displayVersion: "1.0",
             bundleVersion: "1",
             appIcon: .placeholder(icon: .location),
@@ -44,7 +44,7 @@ let package = Package(
             name: "AppModule",
             path: ".",
             resources: [
-                .copy("AIModels")
+
             ]
         )
     ],

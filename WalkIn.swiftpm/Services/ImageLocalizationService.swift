@@ -2,6 +2,7 @@ import Foundation
 import ARKit
 import UIKit
 import Vision
+import ImageIO
 
 class ImageLocalizationService: @unchecked Sendable {
     static let shared = ImageLocalizationService()
@@ -28,10 +29,9 @@ class ImageLocalizationService: @unchecked Sendable {
     
     /// Saves a per-node image (highly compressed/downscaled)
     func saveNodeImage(_ image: UIImage, nodeId: UUID) -> String? {
-        // Resize to something reasonable for Vision (e.g. 640px width is plenty)
-        // For Playground safety <25MB, we aggressively compress
-        guard let resized = image.resized(toWidth: 480) else { return nil }
-        return saveImage(resized, name: "\(nodeId.uuidString).jpg", compression: 0.5)
+        // Resize for better Vision features (720px width)
+        guard let resized = image.resized(toWidth: 720) else { return nil }
+        return saveImage(resized, name: "\(nodeId.uuidString).jpg", compression: 0.6)
     }
     
     private func saveImage(_ image: UIImage, name: String, compression: CGFloat) -> String? {
@@ -62,7 +62,23 @@ class ImageLocalizationService: @unchecked Sendable {
     
     // MARK: - Feature Prints
     
-    /// Generates a FeaturePrintObservation for a given image
+    /// Generates Feature Print directly from PixelBuffer (Faster & Correct Orientation)
+    func generateFeaturePrint(from pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation) -> VNFeaturePrintObservation? {
+        let request = VNGenerateImageFeaturePrintRequest()
+        request.imageCropAndScaleOption = .scaleFill
+        
+        // Use orientation to match saved images (which are usually .up after UIImage save, or .right before save)
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
+        do {
+            try handler.perform([request])
+            return request.results?.first as? VNFeaturePrintObservation
+        } catch {
+            print("❌ Feature Print Error: \(error)")
+            return nil
+        }
+    }
+    
+    /// Generates a FeaturePrintObservation for a given UIImage (Legacy/Fallback)
     func generateFeaturePrint(for image: UIImage) -> VNFeaturePrintObservation? {
         guard let cgImage = image.cgImage else { return nil }
         
@@ -84,15 +100,13 @@ class ImageLocalizationService: @unchecked Sendable {
         var distance: Float = 0
         do {
             try observationA.computeDistance(&distance, to: observationB)
-            // Vision returns "distance" (0 = identical, large = different).
-            // We want "similarity". Normalizing can be tricky, but usually 0.0 is exact match then it grows.
-            // Let's assume a Euclidean-like distance.
-            // A common heuristic: similarity = 1 / (1 + distance) or just thresholds.
-            // Let's return the RAW distance for now, caller decides threshold.
-            // ACTUALLY, Master prompt says "Similarity threshold".
-            // Distance of 0 is high similarity. Distance of 1+ is low.
-            // Let's invert it roughly: 1.0 - min(distance, 1.0)
-            return 1.0 - min(distance, 1.0)
+            // Vision distance: 0 is identical. 
+            // We want a score where 1.0 is identical.
+            // Distance > 15-20 is usually a poor match.
+            // Let's normalize it so distance 0.0 -> 1.0, distance 20.0 -> 0.0
+            let maxDistance: Float = 20.0
+            let score = 1.0 - (distance / maxDistance)
+            return max(0, min(1.0, score))
         } catch {
             return 0.0
         }

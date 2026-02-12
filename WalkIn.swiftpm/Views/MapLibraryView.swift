@@ -1,4 +1,5 @@
 import SwiftUI
+import ARKit
 
 struct MapLibraryView: View {
     @EnvironmentObject var router: WalkInRouter
@@ -89,6 +90,9 @@ struct SavedMapView: View {
     let map: SavedMap
     var onBack: () -> Void
     
+    @State private var worldMap: ARWorldMap?
+    @State private var isLoadingMap = false
+    
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -110,10 +114,25 @@ struct SavedMapView: View {
                 .foregroundColor(.white)
                 .padding(.bottom, 8)
             
-            // Re-use our visualizer!
-            PathVisualizer(path: map.nodes, checkpoints: [])
+            // 3D Spatial Map
+            if let worldMap = worldMap {
+                Scene3DView(path: map.nodes, checkpoints: [], worldMap: worldMap)
+                    .frame(height: 300)
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+            } else {
+                // Fallback while loading or if no map
+                ZStack {
+                    PathVisualizer(path: map.nodes, checkpoints: [])
+                    if isLoadingMap {
+                        ProgressView("Loading Spatial Map...")
+                            .background(Color.black.opacity(0.6))
+                            .cornerRadius(8)
+                    }
+                }
                 .frame(height: 300)
                 .padding(.horizontal)
+            }
             
             // ACTION BUTTONS
             Button(action: {
@@ -175,6 +194,19 @@ struct SavedMapView: View {
                 }
                 .padding(.top)
             }
+        }
+        .onAppear {
+            loadWorldMap()
+        }
+    }
+    
+    private func loadWorldMap() {
+        isLoadingMap = true
+        let mapId = map.id
+        Task {
+            let loadedMap = MapStorageService.shared.loadWorldMap(mapId: mapId)
+            self.worldMap = loadedMap
+            self.isLoadingMap = false
         }
     }
     

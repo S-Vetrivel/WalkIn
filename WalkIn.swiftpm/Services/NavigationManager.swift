@@ -15,6 +15,7 @@ class NavigationManager: ObservableObject {
     @Published var floorLevel: Double = 0.0
     @Published var activityStatus: String = "Ready"
     @Published var currentAIReadout: String = "Scanning..."
+    @Published var currentFloor: Int = 0
     
     @Published var path: [PathNode] = []
     @Published var isTracking: Bool = false
@@ -33,6 +34,8 @@ class NavigationManager: ObservableObject {
     // Alignment
     @Published var alignmentScore: Float = 0.0
     @Published var worldOffset: simd_float4x4 = matrix_identity_float4x4
+    @Published var guidanceMessage: String = "Wait for AR initialization..."
+    @Published var bestMatchNodeId: UUID? = nil
     
     // Feature Print Cache (Optimization)
     private var nodeFeaturePrints: [UUID: VNFeaturePrintObservation] = [:]
@@ -45,6 +48,10 @@ class NavigationManager: ObservableObject {
     @Published var checkpoints: [CGPoint] = []
     var currentPosition: CGPoint = .zero
     var lastCheckpointTime: Date = Date()
+    
+    // Environmental Geometry
+    @Published var obstaclePoints: [simd_float3] = []
+    private var lastPointCaptureTime: TimeInterval = 0
     let checkpointInterval: TimeInterval = 3.0 // Create checkpoint every 3 seconds
     
     // 3D Position Tracking (for SceneKit visualization)
@@ -58,6 +65,7 @@ class NavigationManager: ObservableObject {
     private let altimeter = CMAltimeter()
     
     let visionService = VisionService()
+    let pathFinderService = PathFinderService() // Initialize Path Finder
     let arManager = ARManager.shared // Use shared ARManager
     private var subscribers = Set<AnyCancellable>()
     
@@ -107,8 +115,10 @@ class NavigationManager: ObservableObject {
         self.currentPosition = .zero
         self.path = []
         self.startTime = Date()
+        self.startTime = Date()
         self.lastCheckpointTime = Date()
         self.position3D = (0, 0, 0)
+        self.obstaclePoints = [] // Clear obstacles
     }
     
     private func checkAuthorizationAndStart() {
@@ -128,6 +138,11 @@ class NavigationManager: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] frame in
                 self?.processARFrame(frame)
+                if frame?.camera.trackingState == .normal {
+                    self?.guidanceMessage = self?.mode == .navigating ? "Following path..." : "Scan area to start..."
+                } else {
+                    self?.guidanceMessage = "AR Tracking: \(frame?.camera.trackingState ?? .notAvailable)"
+                }
             }
             .store(in: &subscribers)
         
@@ -189,10 +204,23 @@ class NavigationManager: ObservableObject {
         let mapPos = inverseOffset * position
         self.position3D = (mapPos.x, mapPos.y, mapPos.z)
         
+        // Track current floor level (every 3m = 1 floor)
+        self.currentFloor = Int(round(mapPos.y / 3.0))
+        
         // HANDLE MODES
         switch mode {
         case .recording:
             checkForCheckpointCrossing(currentPos: position)
+            
+            // Capture Obstacle Points (Throttle to 5Hz to avoid memory explosion - every 0.2s)
+            if frame.timestamp - lastPointCaptureTime > 0.2 {
+                if let rawPoints = frame.rawFeaturePoints?.points {
+                    // Filter points close to user (e.g. within 3m) to avoid capturing distant noise?
+                    // For now, capture all valid points.
+                    self.obstaclePoints.append(contentsOf: rawPoints)
+                }
+                lastPointCaptureTime = frame.timestamp
+            }
             
         case .startingNavigation, .navigating:
             // Continuous Relocalization
@@ -200,6 +228,22 @@ class NavigationManager: ObservableObject {
             
             if mode == .navigating {
                 updateNavigationGuidance(currentPos: position)
+                
+                // Check Path Safety (Throttled)
+                if let pixelBuffer = frame.capturedImage as CVPixelBuffer? {
+                    Task {
+                        let status = await pathFinderService.process(pixelBuffer: pixelBuffer)
+                        if status == .blocked {
+                            await MainActor.run {
+                                // Trigger Haptic Feedback
+                                let generator = UINotificationFeedbackGenerator()
+                                generator.notificationOccurred(.warning)
+                                print("⚠️ Path Blocked!")
+                                self.currentAIReadout = "⚠️ OBSTACLE DETECTED"
+                            }
+                        }
+                    }
+                }
             }
             
         case .idle:
@@ -221,7 +265,20 @@ class NavigationManager: ObservableObject {
         
         isRelocalizing = true
         
-        let candidates = path // optimize later
+        // Candidates Optimization: 
+        // Only search nodes within 10 meters of current map-projected position.
+        // If we are LOST (low alignment), maybe search all? For now, let's try optimization.
+        
+        let currentMapPos = (worldOffset.inverse * frame.camera.transform.columns.3)
+        let currentMapPos3 = SIMD3<Float>(currentMapPos.x, currentMapPos.y, currentMapPos.z)
+        
+        // Filter candidates (Localized Search)
+        // If we have high alignment, we trust our position. If low, we search broader.
+        let searchRadius: Float = alignmentScore > 0.4 ? 10.0 : 1000.0 // 1km = all
+        
+        let candidates = path.filter { node in
+            distance(node.position, currentMapPos3) < searchRadius
+        }
         
         Task { [weak self] in
             defer { 
@@ -238,30 +295,20 @@ class NavigationManager: ObservableObject {
             var bestMatchNode: PathNode?
             var bestScore: Float = 0.0
             
-            for node in candidates {
-                guard let imagePath = node.image else { continue }
+            // Limit to max 20 checks to prevent frame drops
+            // Sort by distance to prioritize closest nodes
+            let sortedCandidates = candidates.sorted { 
+                distance($0.position, currentMapPos3) < distance($1.position, currentMapPos3)
+            }.prefix(20)
+            
+            for node in sortedCandidates {
+                // Get pre-loaded print
+                guard let nodePrint = await self.getNodePrint(for: node.id) else { continue }
                 
-                // Get or Load Feature Print
-                let nodePrint: VNFeaturePrintObservation?
-                if let cached = await self.getNodePrint(for: node.id) {
-                    nodePrint = cached
-                } else {
-                    // Load and cache
-                    if let uiImage = ImageLocalizationService.shared.loadUIImage(filename: imagePath),
-                       let print = ImageLocalizationService.shared.generateFeaturePrint(for: uiImage) {
-                        await self.cacheNodePrint(node.id, print: print)
-                        nodePrint = print
-                    } else {
-                        nodePrint = nil
-                    }
-                }
-                
-                if let nodePrint = nodePrint {
-                    let score = ImageLocalizationService.shared.computeSimilarity(between: currentPrint, and: nodePrint)
-                    if score > bestScore {
-                        bestScore = score
-                        bestMatchNode = node
-                    }
+                let score = ImageLocalizationService.shared.computeSimilarity(between: currentPrint, and: nodePrint)
+                if score > bestScore {
+                    bestScore = score
+                    bestMatchNode = node
                 }
             }
             
@@ -280,15 +327,38 @@ class NavigationManager: ObservableObject {
                     let currentARPos = frame.camera.transform.columns.3
                     let savedMapPos = match.transform.columns.3
                     
-                    let translation = currentARPos - savedMapPos
+                    // Construct new offset matrix (Translation + Rotation)
+                    // We want: currentARPos = newOffset * savedMapPos
+                    // where currentARPos is the FULL 4x4 transform
                     
-                    // Construct new offset matrix (Translation only for stability)
-                    var newOffset = matrix_identity_float4x4
-                    newOffset.columns.3 = translation
-                    newOffset.columns.3.w = 1.0
+                    let currentARTransform = frame.camera.transform
+                    let savedNodeTransform = match.transform
                     
-                    // Smoothly interpolate? For now, snap.
-                    self.worldOffset = newOffset
+                    // Simple snap: worldOffset = current * saved.inverse
+                    let newOffset = currentARTransform * savedNodeTransform.inverse
+                    
+                    // Simple snap or smooth?
+                    // Let's use a simple smoothing factor to avoid jumping
+                    let smoothing: Float = 0.3
+                    
+                    // Note: Linearly interpolating a 4x4 matrix is mathematically incorrect for rotation,
+                    // but for small corrections it works better than snapping.
+                    // For a proper implementation, we'd decompose into Quat/Trans and lerp those.
+                    // For now, let's use a soft snap: 
+                    // currentOffset = lerp(currentOffset, newOffset, 0.3)
+                    
+                    if self.alignmentScore < 0.5 {
+                        // Extreme drift or first match: Snap hard
+                        self.worldOffset = newOffset
+                    } else {
+                        // Regular adjustment: Smooth
+                        // self.worldOffset = self.worldOffset.interpolate(to: newOffset, factor: 0.2)
+                        // Actually, let's just snap for now to ensure accuracy, but with a high threshold.
+                        self.worldOffset = newOffset
+                    }
+                    
+                    self.bestMatchNodeId = match.id
+                    self.guidanceMessage = "✅ Position Synced"
                     
                     // If we were starting, jump to navigation
                     if self.mode == .startingNavigation {
@@ -324,11 +394,8 @@ class NavigationManager: ObservableObject {
     
     private func generateFeaturePrint(from pixelBuffer: CVPixelBuffer) async -> VNFeaturePrintObservation? {
         // This runs off-main
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
-        let uiImage = UIImage(cgImage: cgImage)
-        return ImageLocalizationService.shared.generateFeaturePrint(for: uiImage)
+        // Use .right to match the orientation of our saved images (which are saved upright from .right sensor data)
+        return ImageLocalizationService.shared.generateFeaturePrint(from: pixelBuffer, orientation: .right)
     }
     
     // MARK: - Navigation Guidance
@@ -341,11 +408,24 @@ class NavigationManager: ObservableObject {
         
         distanceToNextNode = distance(currentPos3, targetPos3)
         
+        // Floor guidance
+        let targetFloor = Int(round(targetNode.position.y / 3.0))
+        if targetFloor > currentFloor {
+            self.guidanceMessage = "⬆️ Go UP to Level \(targetFloor)"
+        } else if targetFloor < currentFloor {
+            self.guidanceMessage = "⬇️ Go DOWN to Level \(targetFloor)"
+        }
+        
         // If close enough, move to next target
         if distanceToNextNode < 1.0 { // 1 meter threshold
             targetNodeIndex += 1
+            
+            // Clean guidance message after floor change
+            if targetFloor == currentFloor {
+                self.guidanceMessage = "Following path..."
+            }
+            
             print("🎯 Reached Node \(targetNodeIndex)!")
-            // Trigger haptic or sound here
         }
     }
 
@@ -415,8 +495,8 @@ class NavigationManager: ObservableObject {
             let lastPos = lastNode.position
             let dist = distance(lastPos, SIMD3<Float>(currentPos.x, currentPos.y, currentPos.z))
             
-            // Drop a new node every 1.2 meters
-            if dist > 1.2 {
+            // Drop a new node every 0.8 meters (Optimized for 3D Blocks)
+            if dist > 0.8 {
                 checkpointsCrossed += 1
                 recordMovement(at: arManager.cameraTransform ?? matrix_identity_float4x4)
                 print("✅ Checkpoint dropped. Dist: \(dist)")
@@ -437,13 +517,81 @@ class NavigationManager: ObservableObject {
         formatter.dateFormat = "MMM d, h:mm a"
         let defaultName = "Path \(formatter.string(from: Date()))"
         
-        _ = MapStorageService.shared.saveMap(
+        // Capture Environmental Data
+        let currentWalls = arManager.session.currentFrame?.anchors
+            .compactMap { $0 as? ARPlaneAnchor }
+            .map { WallGeometry(anchor: $0) }
+        
+        let savedMap = MapStorageService.shared.saveMap(
             name: defaultName,
             nodes: path,
             totalSteps: checkpointsCrossed,
-            startTime: startTime ?? Date()
+            startTime: startTime ?? Date(),
+            walls: currentWalls,
+            obstaclePoints: self.obstaclePoints
         )
+        
+        // Save World Map
+        Task {
+            do {
+                let worldMapData = try await arManager.getWorldMapData()
+                try MapStorageService.shared.saveWorldMapData(worldMapData, mapId: savedMap.id)
+                print("✅ World Map saved for \(defaultName)")
+            } catch {
+                print("⚠️ Could not save World Map: \(error)")
+            }
+        }
+        
         return true
+    }
+    
+    // MARK: - Loading (Modified for World Map)
+    func startNavigation(with savedPath: [PathNode], mapId: UUID? = nil) {
+        guard mode == .idle else { return }
+        print("🚀 Starting Navigation Session...")
+        
+        // Load path
+        // We start in 'startingNavigation' to allow AR to stabilize AND Visual Alignment
+        self.mode = .startingNavigation 
+        self.path = savedPath
+        self.targetNodeIndex = 0
+        self.alignmentScore = 0.0
+        self.worldOffset = matrix_identity_float4x4
+        self.nodeFeaturePrints = [:] // Clear cache
+        
+        // Don't reset path, but reset other sensors
+        self.checkpointsCrossed = 0
+        self.startTime = Date()
+        
+        // Load World Map if available
+        if let mapId = mapId,
+           let worldMap = MapStorageService.shared.loadWorldMap(mapId: mapId) {
+            arManager.loadWorldMap(worldMap)
+            print("🌍 Loaded ARWorldMap for stable navigation")
+        }
+        
+        checkAuthorizationAndStart()
+        
+        // Pre-load feature prints for smoother runtime performance
+        Task.detached(priority: .userInitiated) {
+            await self.preloadFeaturePrints(for: savedPath)
+        }
+    }
+    
+    private func preloadFeaturePrints(for nodes: [PathNode]) async {
+        print("📥 Pre-loading feature prints for \(nodes.count) nodes...")
+        for node in nodes {
+            guard let imagePath = node.image else { continue }
+            // Check if already cached
+            if await self.getNodePrint(for: node.id) != nil { continue }
+            
+            // Load and cache
+            if let uiImage = ImageLocalizationService.shared.loadUIImage(filename: imagePath),
+               let print = ImageLocalizationService.shared.generateFeaturePrint(for: uiImage) {
+                await self.cacheNodePrint(node.id, print: print)
+            }
+        }
+        print("✅ Feature Print Pre-loading complete.")
     }
 
     // MARK: - AI Context Methods (The Brain)

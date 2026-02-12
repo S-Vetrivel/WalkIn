@@ -59,7 +59,7 @@ class VisionService: NSObject, ObservableObject {
 
     nonisolated private func handleVisionResults(request: VNRequest) {
         // No-op or handle specific non-ML requests if any
-        if let results = request.results as? [VNRecognizedTextObservation] {
+        if let _ = request.results as? [VNRecognizedTextObservation] {
              // Let OCR pass through or handle its own specific callback
         } else {
             // print("⚠️ Vision: Unknown result type: \(type(of: request.results?.first))")

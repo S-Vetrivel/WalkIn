@@ -1,9 +1,12 @@
 import SwiftUI
 import SceneKit
+import ARKit
 
 struct Scene3DView: View {
     let path: [PathNode]
     let checkpoints: [CGPoint]
+    let worldMap: ARWorldMap?
+    var userPosition: (x: Float, y: Float, z: Float)? = nil // Optional live user position
     
     var body: some View {
         SceneView(
@@ -12,20 +15,39 @@ struct Scene3DView: View {
         )
         .background(Color.black)
         .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.cyan.opacity(0.3), lineWidth: 2)
-        )
+
     }
     
     private func createScene() -> SCNScene {
         let scene = SCNScene()
         
-        // Configure camera
+        // Add Point Cloud from World Map
+        if let map = worldMap {
+            addPointCloud(from: map, to: scene)
+        }
+        
+        // Configure camera (Smart Auto-Focus)
         let cameraNode = SCNNode()
         cameraNode.camera = SCNCamera()
-        cameraNode.position = SCNVector3(x: 0, y: 5, z: 10)
-        cameraNode.eulerAngles = SCNVector3(x: -Float.pi/6, y: 0, z: 0)
+        
+        if !path.isEmpty {
+            // Calculate Bounding Box center
+            let minX = path.map { $0.position.x }.min() ?? 0
+            let maxX = path.map { $0.position.x }.max() ?? 0
+            let minZ = path.map { $0.position.z }.min() ?? 0
+            let maxZ = path.map { $0.position.z }.max() ?? 0
+            
+            let centerX = (minX + maxX) / 2
+            let centerZ = (minZ + maxZ) / 2
+            
+            // Set camera to look at center from above-back
+            cameraNode.position = SCNVector3(x: centerX, y: 15, z: centerZ + 15) // High angle
+            cameraNode.look(at: SCNVector3(centerX, 0, centerZ))
+        } else {
+            cameraNode.position = SCNVector3(x: 0, y: 5, z: 10)
+            cameraNode.eulerAngles = SCNVector3(x: -Float.pi/6, y: 0, z: 0)
+        }
+        
         scene.rootNode.addChildNode(cameraNode)
         
         // Add ambient light
@@ -43,102 +65,122 @@ struct Scene3DView: View {
         lightNode.look(at: SCNVector3Zero)
         scene.rootNode.addChildNode(lightNode)
         
-        // Render path nodes as spheres
-        for (index, node) in path.enumerated() {
-            let sphere = SCNSphere(radius: 0.08)
-            let material = SCNMaterial()
-            
-            // Color based on position
-            if index == 0 {
-                // Start - Green
-                material.diffuse.contents = UIColor.systemGreen
-                material.emission.contents = UIColor.systemGreen.withAlphaComponent(0.3)
-            } else if index == path.count - 1 {
-                // Current - Red (pulsing)
-                material.diffuse.contents = UIColor.systemRed
-                material.emission.contents = UIColor.systemRed.withAlphaComponent(0.5)
-            } else {
-                // Path - Cyan
-                material.diffuse.contents = UIColor.systemCyan
-                material.emission.contents = UIColor.systemCyan.withAlphaComponent(0.2)
-            }
-            
-            material.specular.contents = UIColor.white
-            sphere.materials = [material]
-            
-            let sphereNode = SCNNode(geometry: sphere)
-            sphereNode.position = SCNVector3(node.position.x, node.position.y, node.position.z)
-            scene.rootNode.addChildNode(sphereNode)
-            
-            // Add text label for landmarks
-            if let label = node.aiLabel {
-                let text = SCNText(string: label, extrusionDepth: 0.02)
-                text.font = UIFont.systemFont(ofSize: 0.3, weight: .bold)
-                text.flatness = 0.01
-                text.firstMaterial?.diffuse.contents = UIColor.yellow
-                text.firstMaterial?.emission.contents = UIColor.yellow.withAlphaComponent(0.5)
-                
-                let textNode = SCNNode(geometry: text)
-                textNode.position = SCNVector3(node.position.x, node.position.y + 0.15, node.position.z)
-                textNode.scale = SCNVector3(0.1, 0.1, 0.1)
-                
-                // Make text face camera
-                textNode.constraints = [SCNBillboardConstraint()]
-                
-                scene.rootNode.addChildNode(textNode)
-            }
-            
-            // Connect to previous node with cylinder
-            if index > 0 {
-                let previousNode = path[index - 1]
-                let dx = node.position.x - previousNode.position.x
-                let dy = node.position.y - previousNode.position.y
-                let dz = node.position.z - previousNode.position.z
-                let distance = sqrt(dx*dx + dy*dy + dz*dz)
-                
-                if distance > 0.01 {
-                    let cylinder = SCNCylinder(radius: 0.02, height: CGFloat(distance))
-                    let cylinderMaterial = SCNMaterial()
-                    cylinderMaterial.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.6)
-                    cylinderMaterial.emission.contents = UIColor.systemCyan.withAlphaComponent(0.1)
-                    cylinder.materials = [cylinderMaterial]
-                    
-                    let cylinderNode = SCNNode(geometry: cylinder)
-                    
-                    // Position at midpoint
-                    let midX = (node.position.x + previousNode.position.x) / 2
-                    let midY = (node.position.y + previousNode.position.y) / 2
-                    let midZ = (node.position.z + previousNode.position.z) / 2
-                    cylinderNode.position = SCNVector3(midX, midY, midZ)
-                    
-                    // Rotate to connect nodes
-                    cylinderNode.look(at: SCNVector3(node.position.x, node.position.y, node.position.z))
-                    cylinderNode.eulerAngles.x += Float.pi / 2
-                    
-                    scene.rootNode.addChildNode(cylinderNode)
-                }
-            }
-        }
-        
-        // Add checkpoints as yellow spheres
-        for checkpoint in checkpoints {
-            let sphere = SCNSphere(radius: 0.12)
-            let material = SCNMaterial()
-            material.diffuse.contents = UIColor.systemYellow
-            material.emission.contents = UIColor.systemYellow.withAlphaComponent(0.4)
-            material.transparency = 0.7
-            sphere.materials = [material]
-            
-            let checkpointNode = SCNNode(geometry: sphere)
-            checkpointNode.position = SCNVector3(Float(checkpoint.x), 0, Float(checkpoint.y))
-            scene.rootNode.addChildNode(checkpointNode)
-        }
+        // Render building structure (blocks)
+        addBuildingStructure(to: scene)
         
         // Add floor grid for reference
         addFloorGrid(to: scene)
         
+        // Add User Avatar if position provided
+        if let userPos = userPosition {
+            let avatar = SCNSphere(radius: 0.3)
+            avatar.firstMaterial?.diffuse.contents = UIColor.green
+            avatar.firstMaterial?.emission.contents = UIColor.green
+            let avatarNode = SCNNode(geometry: avatar)
+            avatarNode.position = SCNVector3(userPos.x, userPos.y + 0.5, userPos.z)
+            
+            // Add pulse animation
+            let scaleUp = SCNAction.scale(to: 1.5, duration: 0.5)
+            let scaleDown = SCNAction.scale(to: 1.0, duration: 0.5)
+            let sequence = SCNAction.sequence([scaleUp, scaleDown])
+            avatarNode.runAction(SCNAction.repeatForever(sequence))
+            
+            scene.rootNode.addChildNode(avatarNode)
+        }
+        
         return scene
     }
+    
+    private func addBuildingStructure(to scene: SCNScene) {
+        guard !path.isEmpty else { return }
+        
+        // Floor Level Tracking
+        var floorLevels: Set<Int> = []
+        
+        for (index, node) in path.enumerated() {
+            let floorIndex = Int(round(node.position.y / 3.0))
+            floorLevels.insert(floorIndex)
+            
+            // 1. FLOOR TILES (The "Building Blocks")
+            // Create a small tile at each node
+            let tile = SCNBox(width: 0.8, height: 0.05, length: 0.8, chamferRadius: 0.1)
+            let tileMaterial = SCNMaterial()
+            tileMaterial.diffuse.contents = index == 0 ? UIColor.systemGreen : (index == path.count - 1 ? UIColor.systemRed : UIColor.darkGray)
+            tileMaterial.specular.contents = UIColor.white
+            tile.materials = [tileMaterial]
+            
+            let tileNode = SCNNode(geometry: tile)
+            tileNode.position = SCNVector3(node.position.x, node.position.y - 0.05, node.position.z)
+            scene.rootNode.addChildNode(tileNode)
+            
+            // 2. HALLWAY SEGMENTS
+            if index > 0 {
+                let prev = path[index - 1]
+                let dx = node.position.x - prev.position.x
+                let dy = node.position.y - prev.position.y
+                let dz = node.position.z - prev.position.z
+                let dist = sqrt(dx*dx + dy*dy + dz*dz)
+                
+                if dist > 0.1 {
+                    // Create a floor segment block
+                    let segment = SCNBox(width: 0.6, height: 0.02, length: CGFloat(dist), chamferRadius: 0)
+                    let segMat = SCNMaterial()
+                    segMat.diffuse.contents = UIColor.systemGray2
+                    segment.materials = [segMat]
+                    
+                    let segmentNode = SCNNode(geometry: segment)
+                    segmentNode.position = SCNVector3((node.position.x + prev.position.x)/2, 
+                                                   (node.position.y + prev.position.y)/2 - 0.04, 
+                                                   (node.position.z + prev.position.z)/2)
+                    
+                    segmentNode.look(at: SCNVector3(node.position.x, node.position.y, node.position.z))
+                    scene.rootNode.addChildNode(segmentNode)
+                    
+                    // If height change is significant (stairs/slope), add small steps
+                    if abs(dy) > 0.3 {
+                         segMat.diffuse.contents = UIColor.systemBlue // Highlight vertical movement
+                    }
+                }
+            }
+            
+            // 3. LANDMARKS & LABELS
+            if let label = node.aiLabel {
+                addTextLabel(label, at: node.position, to: scene)
+            }
+        }
+        
+        // 4. FLOOR LEVEL LABELS
+        for level in floorLevels {
+            let floorY = Float(level) * 3.0
+            addFloorLabel("Level \(level)", at: SCNVector3(-3, floorY, -3), to: scene)
+        }
+    }
+    
+    private func addTextLabel(_ text: String, at pos: SIMD3<Float>, to scene: SCNScene) {
+        let textGeom = SCNText(string: text, extrusionDepth: 0.05)
+        textGeom.font = UIFont.systemFont(ofSize: 0.3, weight: .bold)
+        textGeom.firstMaterial?.diffuse.contents = UIColor.systemYellow
+        
+        let node = SCNNode(geometry: textGeom)
+        node.position = SCNVector3(pos.x, pos.y + 0.3, pos.z)
+        node.scale = SCNVector3(0.08, 0.08, 0.08)
+        node.constraints = [SCNBillboardConstraint()]
+        scene.rootNode.addChildNode(node)
+    }
+    
+    private func addFloorLabel(_ text: String, at pos: SCNVector3, to scene: SCNScene) {
+        let textGeom = SCNText(string: text, extrusionDepth: 0.1)
+        textGeom.font = UIFont.systemFont(ofSize: 0.5, weight: .black)
+        textGeom.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
+        
+        let node = SCNNode(geometry: textGeom)
+        node.position = pos
+        node.scale = SCNVector3(0.2, 0.2, 0.2)
+        node.constraints = [SCNBillboardConstraint()]
+        scene.rootNode.addChildNode(node)
+    }
+        
+
     
     private func addFloorGrid(to scene: SCNScene) {
         let gridSize: Float = 20
@@ -163,4 +205,35 @@ struct Scene3DView: View {
             scene.rootNode.addChildNode(lineNode2)
         }
     }
+    
+    private func addPointCloud(from map: ARWorldMap, to scene: SCNScene) {
+        let points = map.rawFeaturePoints.points
+        
+        // Create efficient point cloud geometry
+        var vertices: [SCNVector3] = []
+        for (i, point) in points.enumerated() {
+            if i % 3 == 0 { // Downsample for performance
+                vertices.append(SCNVector3(point.x, point.y, point.z))
+            }
+        }
+        
+        guard !vertices.isEmpty else { return }
+        
+        let source = SCNGeometrySource(vertices: vertices)
+        let element = SCNGeometryElement(
+            indices: Array(0..<vertices.count).map { Int32($0) },
+            primitiveType: .point
+        )
+        element.pointSize = 2.0
+        element.minimumPointScreenSpaceRadius = 1.0
+        element.maximumPointScreenSpaceRadius = 5.0
+        
+        let pointsGeometry = SCNGeometry(sources: [source], elements: [element])
+        pointsGeometry.firstMaterial?.diffuse.contents = UIColor.yellow
+        pointsGeometry.firstMaterial?.lightingModel = .constant
+        
+        let pointsNode = SCNNode(geometry: pointsGeometry)
+        scene.rootNode.addChildNode(pointsNode)
+    }
 }
+

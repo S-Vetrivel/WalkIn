@@ -8,6 +8,10 @@ struct SavedMap: Codable, Identifiable {
     let totalSteps: Int
     let duration: TimeInterval // in seconds
     
+    // Environmental Data
+    var walls: [WallGeometry]? = []
+    var obstaclePoints: [Float]? = [] // Flat array [x, y, z, x, y, z...]
+    
     // Computed helper for display
     var dateString: String {
         let formatter = DateFormatter()

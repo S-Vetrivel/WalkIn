@@ -100,6 +100,7 @@ struct ARViewContainer: UIViewRepresentable {
             updateArrow(targetIndex: targetIndex, path: path, mode: mode)
         }
         
+        @MainActor
         private func addSpheres(for nodeData: PathNode, to arView: ARSCNView) {
             // Create a blue sphere
             let sphere = SCNSphere(radius: 0.05) // 5cm radius
@@ -120,6 +121,7 @@ struct ARViewContainer: UIViewRepresentable {
             nodeMap[nodeData.id] = node
         }
         
+        @MainActor
         private func updateNodeAppearance(_ node: SCNNode, index: Int, targetIndex: Int, mode: NavigationManager.SessionMode) {
             guard let material = node.geometry?.firstMaterial else { return }
             
@@ -148,22 +150,59 @@ struct ARViewContainer: UIViewRepresentable {
         }
         
         // MARK: - Arrow Logic
-        var arrowNode: SCNNode?
         
         @MainActor
         func updateArrow(targetIndex: Int, path: [PathNode], mode: NavigationManager.SessionMode) {
-            guard let arView = arView, mode == .navigating, targetIndex < path.count else {
+            guard let arView = arView else { return }
+            let arrowNode = arView.scene.rootNode.childNode(withName: "NavArrow", recursively: false)
+            
+            guard mode == .navigating, targetIndex < path.count else {
                 arrowNode?.removeFromParentNode()
-                arrowNode = nil
                 return
             }
             
             // Create arrow if needed
-            if arrowNode == nil {
+            let arrow: SCNNode
+            if let existing = arrowNode {
+                arrow = existing
+            } else {
                 createArrow()
+                // Retrieve it back (it was just added)
+                guard let newArrow = arView.scene.rootNode.childNode(withName: "NavArrow", recursively: false) else { return }
+                arrow = newArrow
             }
             
-            // Position and Rotation are handled in renderer callback for smoothness
+            // Update Position
+            guard let pointOfView = arView.pointOfView else { return }
+            
+            let targetNode = path[targetIndex]
+            // APPLY WORLD OFFSET TO TARGET NODE POSITION FOR ARROW
+            // We use the passed-in currentWorldOffset which is updated in updatePathNodes
+            let targetTransform = currentWorldOffset * targetNode.transform
+            let targetPos = SCNVector3(targetTransform.columns.3.x, targetTransform.columns.3.y, targetTransform.columns.3.z)
+            
+            let currentPos = pointOfView.position
+            let transform = pointOfView.transform
+            let orientation = SCNVector3(-transform.m31, -transform.m32, -transform.m33) // Forward vector
+            let up = SCNVector3(transform.m21, transform.m22, transform.m23)
+            
+            // We want 1m forward and 0.3m down relative to camera
+            let forwardDist: Float = 1.0
+            let downDist: Float = 0.3
+            
+            let finalPos = SCNVector3(
+                currentPos.x + orientation.x * forwardDist - up.x * downDist,
+                currentPos.y + orientation.y * forwardDist - up.y * downDist,
+                currentPos.z + orientation.z * forwardDist - up.z * downDist
+            )
+            
+            // Smooth movement? SCNTransaction?
+            // Since this is per-frame (via SwiftUI update), direct set is fine.
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.1
+            arrow.position = finalPos
+            arrow.look(at: targetPos)
+            SCNTransaction.commit()
         }
         
         @MainActor
@@ -183,54 +222,91 @@ struct ARViewContainer: UIViewRepresentable {
             cylinderNode.position = SCNVector3(0, 0, 0.1)
             cylinderNode.eulerAngles.x = -Float.pi / 2
             
-            arrowNode = SCNNode()
-            arrowNode?.addChildNode(coneNode)
-            arrowNode?.addChildNode(cylinderNode)
+            let arrowNode = SCNNode()
+            arrowNode.name = "NavArrow"
+            arrowNode.addChildNode(coneNode)
+            arrowNode.addChildNode(cylinderNode)
             
-            arView.scene.rootNode.addChildNode(arrowNode!)
+            arView.scene.rootNode.addChildNode(arrowNode)
+        }
+        // MARK: - ARSCNViewDelegate (Plane Detection)
+        
+        func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+            // Visualize Planes
+            guard let planeAnchor = anchor as? ARPlaneAnchor else { return }
+            
+            let gridNode = createGridNode(anchor: planeAnchor)
+            node.addChildNode(gridNode)
         }
         
-        func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
-            // Note: This runs on a background thread!
-            // Do NOT access arView (MainActor) here.
+        func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+            guard let planeAnchor = anchor as? ARPlaneAnchor,
+                  let gridNode = node.childNodes.first,
+                  let planeGeometry = gridNode.geometry as? SCNPlane else { return }
             
-            guard let arrow = arrowNode,
-                  let pointOfView = renderer.pointOfView, // Use renderer prop, threading safe(r)
-                  currentMode == .navigating,
-                  currentTargetIndex < currentPath.count
-            else { return }
+            // Update size
+            planeGeometry.width = CGFloat(planeAnchor.extent.x)
+            planeGeometry.height = CGFloat(planeAnchor.extent.z)
             
-            let targetNode = currentPath[currentTargetIndex]
-            // APPLY WORLD OFFSET TO TARGET NODE POSITION FOR ARROW
-            let targetTransform = currentWorldOffset * targetNode.transform
-            let targetPos = SCNVector3(targetTransform.columns.3.x, targetTransform.columns.3.y, targetTransform.columns.3.z)
+            // Update position (center of the plane)
+            gridNode.position = SCNVector3(planeAnchor.center.x, 0, planeAnchor.center.z)
             
-            // Position arrow 1 meter in front of camera, slightly down
-            let currentPos = pointOfView.position
-             // pointOfView.transform gives us the camera's orientation matrix
-             // The 3rd column (index 2) is the backward vector (-Z)
-             // The 2nd column (index 1) is the up vector (+Y)
-             // The 1st column (index 0) is the right vector (+X)
-             
-            let transform = pointOfView.transform
-            let orientation = SCNVector3(-transform.m31, -transform.m32, -transform.m33) // Forward vector
-            let up = SCNVector3(transform.m21, transform.m22, transform.m23)
-            
-            // We want 1m forward and 0.3m down relative to camera
-            let forwardDist: Float = 1.0
-            let downDist: Float = 0.3
-            
-            let finalPos = SCNVector3(
-                currentPos.x + orientation.x * forwardDist - up.x * downDist,
-                currentPos.y + orientation.y * forwardDist - up.y * downDist,
-                currentPos.z + orientation.z * forwardDist - up.z * downDist
-            )
-            
-            arrow.position = finalPos
-            
-            // Point at target
-            arrow.look(at: targetPos)
+            // Update texture tiling based on size (1 tile per meter)
+            if let material = planeGeometry.firstMaterial {
+                material.diffuse.contentsTransform = SCNMatrix4MakeScale(planeAnchor.extent.x, planeAnchor.extent.z, 1)
+                material.diffuse.wrapS = .repeat
+                material.diffuse.wrapT = .repeat
+            }
         }
         
+        // MARK: - Grid Generation
+        
+        private func createGridNode(anchor: ARPlaneAnchor) -> SCNNode {
+            let plane = SCNPlane(width: CGFloat(anchor.extent.x), height: CGFloat(anchor.extent.z))
+            
+            let material = SCNMaterial()
+            material.diffuse.contents = createGridTexture()
+            material.transparency = 0.5
+            material.isDoubleSided = true
+            
+            // Repeat texture (1 tile per meter)
+            material.diffuse.contentsTransform = SCNMatrix4MakeScale(anchor.extent.x, anchor.extent.z, 1)
+            material.diffuse.wrapS = .repeat
+            material.diffuse.wrapT = .repeat
+            
+            plane.materials = [material]
+            
+            let node = SCNNode(geometry: plane)
+            node.position = SCNVector3(anchor.center.x, 0, anchor.center.z)
+            // Rotate flat on the ground (Planes are X-Z, SCNPlane is X-Y)
+            node.eulerAngles.x = -.pi / 2
+            
+            return node
+        }
+        
+        private func createGridTexture() -> UIImage {
+            let size = CGSize(width: 100, height: 100) // 10cm x 10cm tile resolution? No, map 1 tile = 1 meter visually?
+            // Let's say 50px = 1 meter? No.
+            // If scale is (extent.x, extent.z), then the texture is repeated X times.
+            // If texture is 512x512, repeated X times.
+            // Let's create a simple square with a border.
+            
+            let renderer = UIGraphicsImageRenderer(size: size)
+            return renderer.image { context in
+                UIColor.clear.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                
+                // Draw Grid Lines
+                let path = UIBezierPath(rect: CGRect(origin: .zero, size: size))
+                UIColor.cyan.withAlphaComponent(0.8).setStroke()
+                path.lineWidth = 3 // Thicker lines
+                path.stroke()
+                
+                // Detailed inner cross?
+                // context.cgContext.move(to: CGPoint(x: 0, y: 50)); context.cgContext.addLine(to: CGPoint(x: 100, y: 50))
+                // context.cgContext.move(to: CGPoint(x: 50, y: 0)); context.cgContext.addLine(to: CGPoint(x: 50, y: 100))
+                // context.cgContext.strokePath()
+            }
+        }
     }
 }

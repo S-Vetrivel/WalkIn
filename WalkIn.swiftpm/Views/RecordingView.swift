@@ -54,7 +54,7 @@ struct RecordingView: View {
                         VStack(spacing: 8) {
                             Group {
                                 if show3DView {
-                                    Scene3DView(path: nav.path, checkpoints: [])
+                                    Scene3DView(path: nav.path, checkpoints: [], worldMap: nil, userPosition: nav.position3D)
                                 } else {
                                     PathVisualizer(path: nav.path, checkpoints: [], userPosition: nav.position3D)
                                 }
@@ -120,11 +120,13 @@ struct RecordingView: View {
                     }
                     
                     // Stats Row
-                    HStack(spacing: 40) {
-                        DataWidget(icon: "arrow.up.and.down", value: String(format: "%.1f m", nav.floorLevel), label: "ELEV")
+                    HStack(spacing: 30) {
+                        DataWidget(icon: "arrow.up.and.down", value: String(format: "%.1f m", nav.floorLevel), label: "ALT")
                             .foregroundColor(.green)
+                            
+                        DataWidget(icon: "layers.fill", value: "L\(nav.currentFloor)", label: "FLOOR")
+                            .foregroundColor(.blue)
                         
-                        // Show raw coordinate for debugging?
                         DataWidget(icon: "mappin.and.ellipse", value: "\(nav.path.count)", label: "NODES")
                             .foregroundColor(.orange)
                     }
@@ -206,6 +208,73 @@ struct RecordingView: View {
                 .padding(.bottom, 30)
             }
             
+            // LAYER 2.5: GUIDANCE OVERLAY
+            if nav.mode != .idle && !showInstructions {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Text(nav.guidanceMessage)
+                            .font(.system(.subheadline, design: .rounded))
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(nav.alignmentScore > 0.6 ? Color.green.opacity(0.8) : Color.black.opacity(0.6))
+                            .cornerRadius(20)
+                        Spacer()
+                    }
+                    .padding(.top, 110) // Below HUD
+                    
+                    // NEW: 'MATCH THIS VIEW' GUIDANCE
+                    if nav.alignmentScore < 0.5 && nav.mode != .idle {
+                        VStack(spacing: 8) {
+                            Text("MATCH THIS VIEW")
+                                .font(.caption2)
+                                .fontWeight(.black)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.blue)
+                                .cornerRadius(4)
+                            
+                            if let nodeId = nav.bestMatchNodeId,
+                               let node = nav.path.first(where: { $0.id == nodeId }),
+                               let filename = node.image,
+                               let uiImage = ImageLocalizationService.shared.loadUIImage(filename: filename) {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 120, height: 120)
+                                    .cornerRadius(8)
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white, lineWidth: 2))
+                                    .shadow(radius: 5)
+                            } else {
+                                // Default icon if no node image yet
+                                Image(systemName: "camera.viewfinder")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.white)
+                                    .frame(width: 120, height: 120)
+                                    .background(Color.white.opacity(0.1))
+                                    .cornerRadius(8)
+                            }
+                            
+                            Text("Move camera to align with the saved snapshot")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                        }
+                        .padding(.vertical, 12)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(16)
+                        .shadow(radius: 10)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+                    
+                    Spacer()
+                }
+            }
+            
             // LAYER 3: INSTRUCTIONS OVERLAY
             if showInstructions && nav.mode == .recording {
                 Color.black.opacity(0.8).ignoresSafeArea()
@@ -260,11 +329,12 @@ struct RecordingView: View {
                         Text("Point camera at any recorded node to sync.")
                             .foregroundColor(.gray)
                         
-                        // Reference Image
-                         if let firstNode = nav.path.first, let imagePath = firstNode.image,
+                        // Reference Image (Shows closest match or start)
+                         let displayNode = nav.path.first(where: { $0.id == nav.bestMatchNodeId }) ?? nav.path.first
+                         if let node = displayNode, let imagePath = node.image,
                             let image = ImageLocalizationService.shared.loadUIImage(filename: imagePath) {
                              VStack {
-                                 Text("Reference (Start)")
+                                 Text(nav.bestMatchNodeId != nil ? "Closest Landmark" : "Reference (Start)")
                                      .font(.caption)
                                      .foregroundColor(.white)
                                  Image(uiImage: image)
@@ -403,4 +473,5 @@ struct RecordingView: View {
                 Text(label).font(.caption2).opacity(0.7)
             }
         }
-        }
+    }
+

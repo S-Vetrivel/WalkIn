@@ -27,7 +27,14 @@ class ARManager: NSObject, ObservableObject, ARSessionDelegate {
         
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravityAndHeading
-        configuration.planeDetection = [.horizontal] 
+        configuration.planeDetection = [.horizontal, .vertical]
+        
+        // Enable Mesh Reconstruction (LiDAR) if available
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            configuration.sceneReconstruction = .mesh
+            statusMessage = "LiDAR Mesh Reconstruction Enabled"
+        }
+        
         // We might want to enable environment texturing for realistic lighting
         configuration.environmentTexturing = .automatic
         
@@ -92,5 +99,36 @@ class ARManager: NSObject, ObservableObject, ARSessionDelegate {
             self.statusMessage = "AR Session Resumed."
             // Optionally reset tracking if interruption was long
         }
+    }
+    // MARK: - World Map Persistence
+    
+    func getWorldMapData() async throws -> Data {
+        return try await withCheckedThrowingContinuation { continuation in
+            session.getCurrentWorldMap { worldMap, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else if let worldMap = worldMap {
+                    do {
+                        let data = try NSKeyedArchiver.archivedData(withRootObject: worldMap, requiringSecureCoding: true)
+                        continuation.resume(returning: data)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                } else {
+                    continuation.resume(throwing: ARCamera.TrackingState.Reason.initializing as! Error) // Generic error
+                }
+            }
+        }
+    }
+    
+    func loadWorldMap(_ worldMap: ARWorldMap) {
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.worldAlignment = .gravityAndHeading
+        configuration.planeDetection = [.horizontal]
+        configuration.environmentTexturing = .automatic
+        configuration.initialWorldMap = worldMap
+        
+        session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        statusMessage = "Loaded World Map. Relocalizing..."
     }
 }

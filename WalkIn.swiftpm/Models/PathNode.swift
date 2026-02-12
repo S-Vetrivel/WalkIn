@@ -1,5 +1,6 @@
 import Foundation
 import simd
+import ARKit
 
 struct PathNode: Codable, Identifiable {
     var id = UUID()
@@ -71,5 +72,49 @@ struct PathNode: Codable, Identifiable {
         self.detectedObject = detectedObject
         self.side = .none
         self.isVerified = false
+    }
+}
+
+// Environmental Geometry
+struct WallGeometry: Codable, Identifiable {
+    var id: UUID = UUID()
+    let center: [Float] // [x, y, z]
+    let extent: [Float] // [width, height, length] (Plane extent is usually X-Z in ARKit local space)
+    let transform: [Float] // 16-element matrix
+    
+    // Helpers
+    var center3: SIMD3<Float> {
+        guard center.count == 3 else { return .zero }
+        return SIMD3<Float>(center[0], center[1], center[2])
+    }
+    
+    var extent3: SIMD3<Float> {
+        guard extent.count == 3 else { return .zero }
+        return SIMD3<Float>(extent[0], extent[1], extent[2])
+    }
+    
+    var transformMatrix: simd_float4x4 {
+        guard transform.count == 16 else { return matrix_identity_float4x4 }
+        return simd_float4x4(
+            simd_float4(transform[0], transform[1], transform[2], transform[3]),
+            simd_float4(transform[4], transform[5], transform[6], transform[7]),
+            simd_float4(transform[8], transform[9], transform[10], transform[11]),
+            simd_float4(transform[12], transform[13], transform[14], transform[15])
+        )
+    }
+    
+    init(anchor: ARPlaneAnchor) {
+        self.id = anchor.identifier
+        self.center = [anchor.center.x, anchor.center.y, anchor.center.z]
+        self.extent = [anchor.extent.x, anchor.extent.y, anchor.extent.z]
+        
+        // Transform
+        let t = anchor.transform
+        self.transform = [
+            t.columns.0.x, t.columns.0.y, t.columns.0.z, t.columns.0.w,
+            t.columns.1.x, t.columns.1.y, t.columns.1.z, t.columns.1.w,
+            t.columns.2.x, t.columns.2.y, t.columns.2.z, t.columns.2.w,
+            t.columns.3.x, t.columns.3.y, t.columns.3.z, t.columns.3.w
+        ]
     }
 }

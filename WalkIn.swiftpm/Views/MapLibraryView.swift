@@ -116,7 +116,7 @@ struct SavedMapView: View {
             
             // 3D Spatial Map
             if let worldMap = worldMap {
-                Scene3DView(path: map.nodes, checkpoints: [], worldMap: worldMap)
+                Scene3DView(path: map.nodes, checkpoints: [], walls: map.walls, worldMap: worldMap)
                     .frame(height: 300)
                     .cornerRadius(12)
                     .padding(.horizontal)
@@ -163,8 +163,46 @@ struct SavedMapView: View {
                     }
                     .padding(.horizontal)
                     
-                    // Landmarks
-                    let landmarks = map.nodes.filter { $0.aiLabel != nil || $0.detectedObject != nil }
+                    // Points of Interest (Manual Landmarks)
+                    let manualLandmarks = map.nodes.filter { $0.isManualLandmark && $0.aiLabel != nil }
+                    if !manualLandmarks.isEmpty {
+                        VStack(alignment: .leading) {
+                            Text("Points of Interest")
+                                .font(.headline)
+                                .foregroundColor(.yellow)
+                                .padding(.horizontal)
+                            
+                            ForEach(manualLandmarks) { node in
+                                Button(action: {
+                                    navManager.startNavigation(with: map.nodes)
+                                    navManager.setDestination(nodeId: node.id)
+                                    router.navigate(to: .recording)
+                                }) {
+                                    HStack {
+                                        // Icon based on source
+                                        if node.landmarkSource == .aiPrompt {
+                                            Image(systemName: "text.viewfinder").foregroundColor(.cyan)
+                                        } else {
+                                            Image(systemName: "flag.fill").foregroundColor(.yellow)
+                                        }
+                                        
+                                        Text(node.aiLabel ?? "").foregroundColor(.white)
+                                        Spacer()
+                                        Image(systemName: "arrow.triangle.turn.up.right.circle.fill")
+                                            .foregroundColor(.green)
+                                    }
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.05))
+                                    .cornerRadius(8)
+                                    .padding(.horizontal)
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Auto-detected Landmarks
+                    let landmarks = map.nodes.filter { !$0.isManualLandmark && ($0.aiLabel != nil || $0.detectedObject != nil) }
                     if !landmarks.isEmpty {
                         VStack(alignment: .leading) {
                             Text("Landmarks Found")
@@ -173,21 +211,29 @@ struct SavedMapView: View {
                                 .padding(.horizontal)
                             
                             ForEach(landmarks) { node in
-                                HStack {
-                                    if let text = node.aiLabel {
-                                        Image(systemName: "text.viewfinder").foregroundColor(.cyan)
-                                        Text(text).foregroundColor(.white)
-                                    } else if let obj = node.detectedObject {
-                                        Image(systemName: "cube.transparent").foregroundColor(.orange)
-                                        Text(obj).foregroundColor(.white)
+                                Button(action: {
+                                    navManager.startNavigation(with: map.nodes)
+                                    navManager.setDestination(nodeId: node.id)
+                                    router.navigate(to: .recording)
+                                }) {
+                                    HStack {
+                                        if let text = node.aiLabel {
+                                            Image(systemName: "text.viewfinder").foregroundColor(.cyan)
+                                            Text(text).foregroundColor(.white)
+                                        } else if let obj = node.detectedObject {
+                                            Image(systemName: "cube.transparent").foregroundColor(.orange)
+                                            Text(obj).foregroundColor(.white)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "arrow.triangle.turn.up.right.circle.fill")
+                                            .foregroundColor(.green)
                                     }
-                                    Spacer()
-                                    Text("Step \(node.stepCount)")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.05))
+                                    .cornerRadius(8)
+                                    .padding(.horizontal)
                                 }
-                                .padding(.horizontal)
-                                .padding(.vertical, 6)
                             }
                         }
                     }

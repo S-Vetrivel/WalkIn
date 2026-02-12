@@ -42,13 +42,21 @@ struct PathNode: Codable, Identifiable {
     
     var side: RelativeSide = .none
     var isVerified: Bool = false
+    var isManualLandmark: Bool = false
+    var landmarkSource: LandmarkSource = .manual
     
     enum RelativeSide: String, Codable {
         case left, right, front, none
     }
     
+    enum LandmarkSource: String, Codable {
+        case manual   // User pressed button
+        case aiPrompt // User confirmed AI suggestion
+        case auto     // Background detection
+    }
+    
     // Init with matrix
-    init(timestamp: Date, stepCount: Int, heading: Double, floorLevel: Double, transform: simd_float4x4, image: String? = nil, aiLabel: String? = nil, detectedObject: String? = nil) {
+    init(timestamp: Date, stepCount: Int, heading: Double, floorLevel: Double, transform: simd_float4x4, image: String? = nil, aiLabel: String? = nil, detectedObject: String? = nil, isManualLandmark: Bool = false, source: LandmarkSource = .manual) {
         self.timestamp = timestamp
         self.stepCount = stepCount
         self.heading = heading
@@ -71,7 +79,9 @@ struct PathNode: Codable, Identifiable {
         self.aiLabel = aiLabel
         self.detectedObject = detectedObject
         self.side = .none
-        self.isVerified = false
+        self.isVerified = isManualLandmark // Manual landmarks are verified by default
+        self.isManualLandmark = isManualLandmark
+        self.landmarkSource = source
     }
 }
 

@@ -7,6 +7,8 @@ struct RecordingView: View {
     
     @State private var showInstructions = true
     @State private var show3DView = false // Added view toggle state
+    @State private var showLandmarkInput = false
+    @State private var landmarkName = ""
     
     // Separate State for smoother animations
     var detectedText: String {
@@ -32,7 +34,7 @@ struct RecordingView: View {
             
             // LAYER 2: DASHBOARD UI
             VStack(spacing: 15) {
-
+                
                 
                 // MARK: - TOP HUD
                 HStack(alignment: .top) {
@@ -54,7 +56,7 @@ struct RecordingView: View {
                         VStack(spacing: 8) {
                             Group {
                                 if show3DView {
-                                    Scene3DView(path: nav.path, checkpoints: [], worldMap: nil, userPosition: nav.position3D)
+                                    Scene3DView(path: nav.path, checkpoints: [], walls: nil, worldMap: nil, userPosition: nav.position3D)
                                 } else {
                                     PathVisualizer(path: nav.path, checkpoints: [], userPosition: nav.position3D)
                                 }
@@ -123,7 +125,7 @@ struct RecordingView: View {
                     HStack(spacing: 30) {
                         DataWidget(icon: "arrow.up.and.down", value: String(format: "%.1f m", nav.floorLevel), label: "ALT")
                             .foregroundColor(.green)
-                            
+                        
                         DataWidget(icon: "layers.fill", value: "L\(nav.currentFloor)", label: "FLOOR")
                             .foregroundColor(.blue)
                         
@@ -165,14 +167,15 @@ struct RecordingView: View {
                         .padding(.horizontal)
                     } else {
                         Button(action: {
-                            nav.placeAnchor()
+                            landmarkName = ""
+                            showLandmarkInput = true
                         }) {
-                            Label("Drop Anchor", systemImage: "mappin")
+                            Label("Mark Point", systemImage: "flag.fill")
                                 .font(.headline)
                                 .foregroundColor(.white)
                                 .padding(.vertical, 10)
                                 .padding(.horizontal, 20)
-                                .background(Color.white.opacity(0.2))
+                                .background(Color.yellow.opacity(0.8))
                                 .cornerRadius(12)
                         }
                     }
@@ -191,7 +194,7 @@ struct RecordingView: View {
                     } else {
                         // Recording: Save immediately
                         nav.stopTracking()
-                         _ = nav.saveCurrentPath()
+                        _ = nav.saveCurrentPath()
                         router.navigate(to: .home)
                     }
                 }) {
@@ -275,7 +278,66 @@ struct RecordingView: View {
                 }
             }
             
-            // LAYER 3: INSTRUCTIONS OVERLAY
+            // LAYER 3: INSTRUCTIONS & ALERTS OVERLAY
+            
+            // PENDING LANDMARK CONFIRMATION CARD
+            if let pending = nav.pendingLandmark {
+                VStack {
+                    Spacer()
+                    VStack(spacing: 16) {
+                        Text("LANDMARK DETECTED")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white.opacity(0.8))
+                        
+                        Text(pending.text)
+                            .font(.system(.title, design: .rounded))
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                        
+                        HStack(spacing: 20) {
+                            Button(action: {
+                                withAnimation {
+                                    nav.dismissPendingLandmark()
+                                }
+                            }) {
+                                Text("Dismiss")
+                                    .fontWeight(.semibold)
+                                    .frame(minWidth: 100)
+                                    .padding()
+                                    .background(Color.gray.opacity(0.5))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                            }
+                            
+                            Button(action: {
+                                withAnimation {
+                                    nav.confirmPendingLandmark()
+                                }
+                            }) {
+                                Text("Add Landmark")
+                                    .fontWeight(.bold)
+                                    .frame(minWidth: 120)
+                                    .padding()
+                                    .background(Color.green)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                            }
+                        }
+                    }
+                    .padding(24)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(24)
+                    .shadow(radius: 20)
+                    .padding(30)
+                    .padding(.bottom, 100)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                .zIndex(100) // Ensure it sits on top
+            }
+            
             if showInstructions && nav.mode == .recording {
                 Color.black.opacity(0.8).ignoresSafeArea()
                 
@@ -317,93 +379,103 @@ struct RecordingView: View {
             }
             
             // LAYER 4: VISUAL ALIGNMENT UI
-                if nav.mode == .startingNavigation {
-                     Color.black.opacity(0.6).ignoresSafeArea()
-                     
-                     VStack(spacing: 20) {
-                        Text("Visual Alignment")
-                            .font(.title)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
+            if nav.mode == .startingNavigation {
+                Color.black.opacity(0.6).ignoresSafeArea()
+                
+                VStack(spacing: 20) {
+                    Text("Visual Alignment")
+                        .font(.title)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                    
+                    Text("Point camera at any recorded node to sync.")
+                        .foregroundColor(.gray)
+                    
+                    // Reference Image (Shows closest match or start)
+                    let displayNode = nav.path.first(where: { $0.id == nav.bestMatchNodeId }) ?? nav.path.first
+                    if let node = displayNode, let imagePath = node.image,
+                       let image = ImageLocalizationService.shared.loadUIImage(filename: imagePath) {
+                        VStack {
+                            Text(nav.bestMatchNodeId != nil ? "Closest Landmark" : "Reference (Start)")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(height: 150)
+                                .cornerRadius(10)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(Color.white, lineWidth: 2)
+                                )
+                        }
+                    }
+                    
+                    // Match Score Indicator
+                    VStack {
+                        Text("MATCH SCORE")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.8))
                         
-                        Text("Point camera at any recorded node to sync.")
-                            .foregroundColor(.gray)
-                        
-                        // Reference Image (Shows closest match or start)
-                         let displayNode = nav.path.first(where: { $0.id == nav.bestMatchNodeId }) ?? nav.path.first
-                         if let node = displayNode, let imagePath = node.image,
-                            let image = ImageLocalizationService.shared.loadUIImage(filename: imagePath) {
-                             VStack {
-                                 Text(nav.bestMatchNodeId != nil ? "Closest Landmark" : "Reference (Start)")
-                                     .font(.caption)
-                                     .foregroundColor(.white)
-                                 Image(uiImage: image)
-                                     .resizable()
-                                     .scaledToFit()
-                                     .frame(height: 150)
-                                     .cornerRadius(10)
-                                     .overlay(
-                                         RoundedRectangle(cornerRadius: 10)
-                                             .stroke(Color.white, lineWidth: 2)
-                                     )
-                             }
-                         }
-                         
-                         // Match Score Indicator
-                         VStack {
-                             Text("MATCH SCORE")
-                                 .font(.caption2)
-                                 .foregroundColor(.white.opacity(0.8))
-                             
-                             HStack {
-                                 ProgressView(value: Double(nav.alignmentScore))
-                                     .progressViewStyle(LinearProgressViewStyle(tint: nav.alignmentScore > 0.6 ? .green : .red))
-                                     .frame(height: 8)
-                                 Text(String(format: "%.0f%%", nav.alignmentScore * 100))
-                                     .font(.headline)
-                                     .foregroundColor(nav.alignmentScore > 0.6 ? .green : .red)
-                                     .frame(width: 50)
-                             }
-                             .padding(.horizontal)
-                         }
-                         
-                         // Controls
-                         Button(action: {
-                             withAnimation {
-                                 nav.mode = .navigating // Start!
-                             }
-                         }) {
-                             HStack {
-                                 if nav.alignmentScore > 0.6 {
-                                     Image(systemName: "checkmark.circle.fill")
-                                     Text("START NAVIGATION")
-                                 } else {
-                                     Image(systemName: "exclamationmark.triangle.fill")
-                                     Text("FORCE START")
-                                 }
-                             }
-                             .font(.headline)
-                             .padding()
-                             .frame(maxWidth: .infinity)
-                             .background(nav.alignmentScore > 0.6 ? Color.green : Color.orange)
-                             .foregroundColor(.white)
-                             .cornerRadius(12)
-                         }
-                         .padding(.top)
-                        
-                        Text("Point camera at the start location until score turns green.")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                     }
-                     .padding(30)
-                     .background(.ultraThinMaterial)
-                     .cornerRadius(24)
-                     .padding(30)
-                     .transition(.scale)
+                        HStack {
+                            ProgressView(value: Double(nav.alignmentScore))
+                                .progressViewStyle(LinearProgressViewStyle(tint: nav.alignmentScore > 0.6 ? .green : .red))
+                                .frame(height: 8)
+                            Text(String(format: "%.0f%%", nav.alignmentScore * 100))
+                                .font(.headline)
+                                .foregroundColor(nav.alignmentScore > 0.6 ? .green : .red)
+                                .frame(width: 50)
+                        }
+                        .padding(.horizontal)
+                    }
+                    
+                    // Controls
+                    Button(action: {
+                        withAnimation {
+                            nav.mode = .navigating // Start!
+                        }
+                    }) {
+                        HStack {
+                            if nav.alignmentScore > 0.6 {
+                                Image(systemName: "checkmark.circle.fill")
+                                Text("START NAVIGATION")
+                            } else {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                Text("FORCE START")
+                            }
+                        }
+                        .font(.headline)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(nav.alignmentScore > 0.6 ? Color.green : Color.orange)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                    }
+                    .padding(.top)
+                    
+                    Text("Point camera at the start location until score turns green.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+                .padding(30)
+                .background(.ultraThinMaterial)
+                .cornerRadius(24)
+                .padding(30)
+                .transition(.scale)
+            }
+        }
+        .alert("Name this location", isPresented: $showLandmarkInput) {
+            TextField("e.g. Room 101", text: $landmarkName)
+            Button("Cancel", role: .cancel) { }
+            Button("Mark") {
+                if !landmarkName.isEmpty {
+                    nav.addNamedPoint(name: landmarkName)
                 }
             }
+        } message: {
+            Text("Enter a name for this landmark.")
         }
     }
     
@@ -474,4 +546,5 @@ struct RecordingView: View {
             }
         }
     }
-
+    
+}

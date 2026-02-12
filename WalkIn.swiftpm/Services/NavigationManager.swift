@@ -398,11 +398,69 @@ class NavigationManager: ObservableObject {
         return ImageLocalizationService.shared.generateFeaturePrint(from: pixelBuffer, orientation: .right)
     }
     
+    // MARK: - Point-to-Point Navigation
+    var destinationNodeId: UUID?
+    
+    func setDestination(nodeId: UUID) {
+        // Validation: Ensure node exists
+        guard let index = path.firstIndex(where: { $0.id == nodeId }) else {
+            print("❌ Destination node not found in path")
+            return
+        }
+        
+        self.destinationNodeId = nodeId
+        print("📍 Destination set to Node \(index) (ID: \(nodeId))")
+        
+        // Recalculate target to point towards this destination
+        // We need to find the closes node to current position, then determine direction
+        if let currentTransform = arManager.cameraTransform {
+            let currentPos = SIMD3<Float>(currentTransform.columns.3.x, currentTransform.columns.3.y, currentTransform.columns.3.z)
+            // Find closest node index
+            var closestDist = Float.greatestFiniteMagnitude
+            var closestIndex = 0
+            
+            for (i, node) in path.enumerated() {
+                let d = distance(currentPos, node.position)
+                if d < closestDist {
+                    closestDist = d
+                    closestIndex = i
+                }
+            }
+            
+            // Determine direction
+            if index > closestIndex {
+                // Moving forward
+                self.targetNodeIndex = closestIndex + 1
+            } else {
+                // Moving backward
+                self.targetNodeIndex = max(closestIndex - 1, 0)
+            }
+        }
+    }
+
     // MARK: - Navigation Guidance
     private func updateNavigationGuidance(currentPos: simd_float4) {
-        guard !path.isEmpty, targetNodeIndex < path.count else { return }
+        guard !path.isEmpty else { return }
         
-        let targetNode = path[targetNodeIndex]
+        // Standard behavior: Go to next index.
+        // But if we have a destination, we need to ensure targetNodeIndex is moving TOWARDS it.
+        
+        var nextStepIndex = targetNodeIndex
+        
+        // If destination set, ensure we are moving towards it
+        if let destId = destinationNodeId, let destIndex = path.firstIndex(where: { $0.id == destId }) {
+            // Basic logic: We are at 'targetNodeIndex' (which is our immediate goal).
+            // But we should check if our current target is actually leading us to the destination?
+            // Yes, because setDestination sets targetNodeIndex.
+            // And update loop below increments/decrements it.
+            // So nextStepIndex IS targetNodeIndex.
+            nextStepIndex = targetNodeIndex
+        }
+        
+        // Ensure bounds
+        nextStepIndex = max(0, min(nextStepIndex, path.count - 1))
+        
+        let targetNode = path[nextStepIndex]
         let currentPos3 = SIMD3<Float>(currentPos.x, currentPos.y, currentPos.z)
         let targetPos3 = targetNode.position
         
@@ -414,18 +472,45 @@ class NavigationManager: ObservableObject {
             self.guidanceMessage = "⬆️ Go UP to Level \(targetFloor)"
         } else if targetFloor < currentFloor {
             self.guidanceMessage = "⬇️ Go DOWN to Level \(targetFloor)"
+        } else {
+             // Only show generic message if no floor change
+             if let destId = destinationNodeId, let destIndex = path.firstIndex(where: { $0.id == destId }) {
+                 if nextStepIndex == destIndex {
+                     self.guidanceMessage = "🏁 Arriving..."
+                 } else {
+                     self.guidanceMessage = "Go to \(path[destIndex].aiLabel ?? "Destination")"
+                 }
+             } else {
+                 self.guidanceMessage = "Follow Path"
+             }
         }
         
         // If close enough, move to next target
         if distanceToNextNode < 1.0 { // 1 meter threshold
-            targetNodeIndex += 1
+            print("🎯 Reached Node \(nextStepIndex)!")
             
-            // Clean guidance message after floor change
-            if targetFloor == currentFloor {
-                self.guidanceMessage = "Following path..."
+            if let destId = destinationNodeId, let destIndex = path.firstIndex(where: { $0.id == destId }) {
+                // Check if we arrived
+                if nextStepIndex == destIndex {
+                     self.guidanceMessage = "🎉 Arrived at Destination!"
+                     self.destinationNodeId = nil // Clear destination
+                     return
+                }
+                
+                // Advance towards destination
+                if destIndex > nextStepIndex {
+                    targetNodeIndex += 1
+                } else {
+                    targetNodeIndex -= 1
+                }
+            } else {
+                // Default: Forward only
+                if targetNodeIndex < path.count - 1 {
+                    targetNodeIndex += 1
+                } else {
+                    self.guidanceMessage = "🏁 Path Complete"
+                }
             }
-            
-            print("🎯 Reached Node \(targetNodeIndex)!")
         }
     }
 
@@ -509,6 +594,51 @@ class NavigationManager: ObservableObject {
         recordMovement()
     }
     
+    func addNamedPoint(name: String) {
+        // Capture current transform
+        guard let transform = arManager.cameraTransform else { return }
+        
+        // Use recordMovement logic but with specific label
+        // We'll manually create the node here to ensure it's distinct
+        
+        let node = PathNode(
+            timestamp: Date(),
+            stepCount: self.checkpointsCrossed,
+            heading: self.heading,
+            floorLevel: self.floorLevel,
+            transform: transform,
+            image: nil, 
+            aiLabel: name,
+            detectedObject: nil,
+            isManualLandmark: true,
+            source: .manual
+        )
+        
+        self.path.append(node)
+        print("📍 Added Manual Landmark: \(name) at \(node.position)")
+        
+        // Also capture an image for it
+        let nodeId = node.id
+        if let frame = arManager.currentFrame {
+            let pixelBuffer = frame.capturedImage
+            
+            Task {
+                let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                let context = CIContext()
+                if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                    let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+                    let filename = ImageLocalizationService.shared.saveNodeImage(uiImage, nodeId: nodeId)
+                    
+                    await MainActor.run {
+                        if let index = self.path.firstIndex(where: { $0.id == nodeId }) {
+                            self.path[index].image = filename
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     // MARK: - Saving
     func saveCurrentPath() -> Bool {
         guard !path.isEmpty else { return false }
@@ -521,6 +651,18 @@ class NavigationManager: ObservableObject {
         let currentWalls = arManager.session.currentFrame?.anchors
             .compactMap { $0 as? ARPlaneAnchor }
             .map { WallGeometry(anchor: $0) }
+            
+        // Capture Mapping Status
+        var status = "Limited"
+        if let frame = arManager.session.currentFrame {
+            switch frame.worldMappingStatus {
+            case .mapped: status = "Mapped"
+            case .extending: status = "Extending"
+            case .limited: status = "Limited"
+            case .notAvailable: status = "Not Available"
+            @unknown default: status = "Unknown"
+            }
+        }
         
         let savedMap = MapStorageService.shared.saveMap(
             name: defaultName,
@@ -528,7 +670,8 @@ class NavigationManager: ObservableObject {
             totalSteps: checkpointsCrossed,
             startTime: startTime ?? Date(),
             walls: currentWalls,
-            obstaclePoints: self.obstaclePoints
+            obstaclePoints: self.obstaclePoints,
+            mappingStatus: status
         )
         
         // Save World Map
@@ -594,32 +737,132 @@ class NavigationManager: ObservableObject {
         print("✅ Feature Print Pre-loading complete.")
     }
 
+    // MARK: - Smart OCR Prompting
+    struct PendingLandmark {
+        let text: String
+        let timestamp: Date
+        let transform: simd_float4x4
+        let snapshot: UIImage?
+    }
+    
+    @Published var pendingLandmark: PendingLandmark?
+    private var pendingLandmarkTimer: Timer?
+    
+    // Priority Keywords for filtering noise
+    private let landmarkLexicon: [String] = [
+        "Room", "Office", "Lab", "Library", "Kitchen", "Exit",
+        "Conference", "Meeting", "Hall", "Lobby", "Reception",
+        "Stairs", "Elevator", "Restroom", "Toilet", "Cafeteria"
+    ]
+    
     // MARK: - AI Context Methods (The Brain)
-        func updateAIContext(text: String?, object: String?) {
-            guard isTracking else { return } // Removed !path.isEmpty check which might block updates if path is slow to start
+    func updateAIContext(text: String?, object: String?) {
+        guard isTracking else { return }
+        
+        // 🔥 FORCE UI REFRESH
+        self.objectWillChange.send()
+        
+        if let t = text {
+            self.currentAIReadout = "TEXT: \(t)"
+            print("✅ UI Updated with TEXT: \(t)")
             
-            // 🔥 FORCE UI REFRESH
-            // This tells SwiftUI: "Hey! Data changed! Redraw the screen NOW!"
-            self.objectWillChange.send()
-            
-            if let t = text {
-                self.currentAIReadout = "TEXT: \(t)"
-                print("✅ UI Updated with TEXT: \(t)") // Debug Print
-            }
-            
-            if let o = object {
-                self.currentAIReadout = "OBJ: \(o)"
-                print("✅ UI Updated with OBJ: \(o)") // Debug Print
-            }
-            
-            // Only save to path if we actually have nodes
-            if !path.isEmpty {
-                var lastNode = path[path.count - 1]
-                if let text = text { lastNode.aiLabel = text }
-                if let object = object { lastNode.detectedObject = object }
-                path[path.count - 1] = lastNode
+            // 🔍 Intelligent Filtering
+            // 1. Check if we already have a pending prompt (don't spam)
+            if pendingLandmark == nil && mode == .recording {
+                // 2. Check if text contains any keyword
+                // Case insensitive check
+                let lowerText = t.lowercased()
+                let match = landmarkLexicon.first { lowerText.contains($0.lowercased()) }
+                
+                if let _ = match {
+                    // 3. Trigger Pending Landmark
+                    if let currentTransform = arManager.cameraTransform {
+                        // Capture snapshot now
+                        var snapshot: UIImage?
+                        if let pixelBuffer = arManager.currentFrame?.capturedImage {
+                             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                             let context = CIContext()
+                             if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                                 snapshot = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+                             }
+                        }
+                        
+                        let pending = PendingLandmark(
+                            text: t,
+                            timestamp: Date(),
+                            transform: currentTransform,
+                            snapshot: snapshot
+                        )
+                        
+                        Task { @MainActor in
+                            self.pendingLandmark = pending
+                            
+                            // Auto-dismiss after 8 seconds
+                            self.pendingLandmarkTimer?.invalidate()
+                            self.pendingLandmarkTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: false) { [weak self] _ in
+                                Task { @MainActor in self?.dismissPendingLandmark() }
+                            }
+                        }
+                    }
+                }
             }
         }
+        
+        if let o = object {
+            self.currentAIReadout = "OBJ: \(o)"
+            print("✅ UI Updated with OBJ: \(o)")
+        }
+        
+        // Only save to path if we actually have nodes AND it's not a pending landmark (yet)
+        // Actually, we still want to tag the current node with raw data for debug, 
+        // but the "Landmark" status is separate.
+        if !path.isEmpty {
+            var lastNode = path[path.count - 1]
+            if let text = text { lastNode.aiLabel = text }
+            if let object = object { lastNode.detectedObject = object }
+            path[path.count - 1] = lastNode
+        }
+    }
+    
+    func confirmPendingLandmark() {
+        guard let pending = pendingLandmark else { return }
+        
+        // Add the landmark using the Captured data (not current)
+        print("📍 User Confirmed Landmark: \(pending.text)")
+        
+        // Create the node manually to use the stored transform/timestamp
+        let node = PathNode(
+            timestamp: pending.timestamp,
+            stepCount: self.checkpointsCrossed,
+            heading: self.heading, // Approximate (current heading)
+            floorLevel: self.floorLevel,
+            transform: pending.transform,
+            image: nil,
+            aiLabel: pending.text,
+            detectedObject: nil,
+            isManualLandmark: true,
+            source: .aiPrompt
+        )
+        
+        self.path.append(node)
+        
+        // Save the snapshot if we have one
+        if let snapshot = pending.snapshot {
+            let nodeId = node.id
+            let filename = ImageLocalizationService.shared.saveNodeImage(snapshot, nodeId: nodeId)
+            if let index = self.path.firstIndex(where: { $0.id == nodeId }) {
+                self.path[index].image = filename
+            }
+        }
+        
+        dismissPendingLandmark()
+    }
+    
+    func dismissPendingLandmark() {
+        self.pendingLandmark = nil
+        self.pendingLandmarkTimer?.invalidate()
+        self.pendingLandmarkTimer = nil
+    }
     func generateJourneySummary() -> String {
         let meaningfulNodes = path.filter { $0.aiLabel != nil || $0.detectedObject != nil }
         var story = "JOURNEY LOG:\n"

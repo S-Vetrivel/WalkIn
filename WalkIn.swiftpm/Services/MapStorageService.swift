@@ -14,13 +14,21 @@ class MapStorageService: @unchecked Sendable {
     }
     
     // MARK: - Save
-    func saveMap(name: String, nodes: [PathNode], totalSteps: Int, startTime: Date, walls: [WallGeometry]? = nil, obstaclePoints: [simd_float3]? = nil) -> SavedMap {
+    func saveMap(name: String, nodes: [PathNode], totalSteps: Int, startTime: Date, walls: [WallGeometry]? = nil, obstaclePoints: [simd_float3]? = nil, mappingStatus: String? = "Limited") -> SavedMap {
         let duration = Date().timeIntervalSince(startTime)
         
         // Flatten obstacle points
         var flatObstacles: [Float] = []
         if let points = obstaclePoints {
             flatObstacles = points.flatMap { [$0.x, $0.y, $0.z] }
+        }
+        
+        // Generate Landmark Map
+        var landmarkMap: [UUID: String] = [:]
+        for node in nodes {
+            if let label = node.aiLabel {
+                landmarkMap[node.id] = label
+            }
         }
         
         var newMap = SavedMap(
@@ -32,6 +40,8 @@ class MapStorageService: @unchecked Sendable {
         )
         newMap.walls = walls
         newMap.obstaclePoints = flatObstacles
+        newMap.landmarkMap = landmarkMap
+        newMap.worldMappingStatus = mappingStatus
         
         var currentMaps = loadMaps()
         currentMaps.insert(newMap, at: 0) // Add to top

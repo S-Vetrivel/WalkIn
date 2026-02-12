@@ -12,6 +12,10 @@ struct SavedMap: Codable, Identifiable {
     var walls: [WallGeometry]? = []
     var obstaclePoints: [Float]? = [] // Flat array [x, y, z, x, y, z...]
     
+    // Metadata for high-accuracy localization
+    var landmarkMap: [UUID: String]? = [:] // Maps Node ID -> Semantic Tag (e.g., "Room 201")
+    var worldMappingStatus: String? = "Limited" // "Mapped", "Extending", "Limited"
+    
     // Computed helper for display
     var dateString: String {
         let formatter = DateFormatter()

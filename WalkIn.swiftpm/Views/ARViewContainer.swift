@@ -102,10 +102,18 @@ struct ARViewContainer: UIViewRepresentable {
         
         @MainActor
         private func addSpheres(for nodeData: PathNode, to arView: ARSCNView) {
-            // Create a blue sphere
-            let sphere = SCNSphere(radius: 0.05) // 5cm radius
-            sphere.firstMaterial?.diffuse.contents = UIColor.cyan.withAlphaComponent(0.9)
-            sphere.firstMaterial?.emission.contents = UIColor.cyan.withAlphaComponent(0.5)
+            // Determine if this is a manual landmark
+            let isLandmark = nodeData.isManualLandmark && nodeData.aiLabel != nil
+            
+            // Create sphere — yellow for landmarks, cyan for regular
+            let sphere = SCNSphere(radius: isLandmark ? 0.07 : 0.05)
+            if isLandmark {
+                sphere.firstMaterial?.diffuse.contents = UIColor.yellow.withAlphaComponent(0.9)
+                sphere.firstMaterial?.emission.contents = UIColor.yellow.withAlphaComponent(0.5)
+            } else {
+                sphere.firstMaterial?.diffuse.contents = UIColor.cyan.withAlphaComponent(0.9)
+                sphere.firstMaterial?.emission.contents = UIColor.cyan.withAlphaComponent(0.5)
+            }
             
             let node = SCNNode(geometry: sphere)
             node.simdTransform = nodeData.transform
@@ -116,6 +124,34 @@ struct ARViewContainer: UIViewRepresentable {
             let scaleDown = SCNAction.scale(to: 1.0, duration: 1.0)
             let pulse = SCNAction.repeatForever(SCNAction.sequence([scaleUp, scaleDown]))
             node.runAction(pulse)
+            
+            // Add floating 3D text label for landmarks
+            if isLandmark, let labelText = nodeData.aiLabel {
+                let text = SCNText(string: labelText, extrusionDepth: 0.5)
+                text.font = UIFont.boldSystemFont(ofSize: 4)
+                text.flatness = 0.2
+                text.firstMaterial?.diffuse.contents = UIColor.yellow
+                text.firstMaterial?.emission.contents = UIColor.yellow.withAlphaComponent(0.4)
+                
+                let textNode = SCNNode(geometry: text)
+                // Scale down text to AR world size
+                textNode.scale = SCNVector3(0.01, 0.01, 0.01)
+                // Center the text horizontally
+                let (_, maxBound) = textNode.boundingBox
+                let textWidth = maxBound.x - textNode.boundingBox.min.x
+                textNode.position = SCNVector3(
+                    -textWidth * 0.01 / 2.0,  // Center X
+                    0.12,                       // Above the sphere
+                    0
+                )
+                
+                // Billboard constraint — text always faces camera
+                let billboardConstraint = SCNBillboardConstraint()
+                billboardConstraint.freeAxes = [.X, .Y]
+                textNode.constraints = [billboardConstraint]
+                
+                node.addChildNode(textNode)
+            }
             
             arView.scene.rootNode.addChildNode(node)
             nodeMap[nodeData.id] = node

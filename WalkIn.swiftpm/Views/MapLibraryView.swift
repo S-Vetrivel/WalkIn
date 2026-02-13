@@ -73,6 +73,7 @@ struct MapLibraryView: View {
             }
         }
         .onAppear {
+            print("🗺️ MapLibraryView Appeared")
             loadMaps()
         }
     }
@@ -137,7 +138,7 @@ struct SavedMapView: View {
             // ACTION BUTTONS
             Button(action: {
                 // START NAVIGATION
-                navManager.startNavigation(with: map.nodes)
+                navManager.startNavigation(with: map.nodes, mapId: map.id)
                 router.navigate(to: .recording)
             }) {
                 HStack {
@@ -174,7 +175,7 @@ struct SavedMapView: View {
                             
                             ForEach(manualLandmarks) { node in
                                 Button(action: {
-                                    navManager.startNavigation(with: map.nodes)
+                                    navManager.startNavigation(with: map.nodes, mapId: map.id)
                                     navManager.setDestination(nodeId: node.id)
                                     router.navigate(to: .recording)
                                 }) {
@@ -212,7 +213,7 @@ struct SavedMapView: View {
                             
                             ForEach(landmarks) { node in
                                 Button(action: {
-                                    navManager.startNavigation(with: map.nodes)
+                                    navManager.startNavigation(with: map.nodes, mapId: map.id)
                                     navManager.setDestination(nodeId: node.id)
                                     router.navigate(to: .recording)
                                 }) {

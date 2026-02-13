@@ -32,7 +32,7 @@ struct ARViewContainer: UIViewRepresentable {
     
     func updateUIView(_: ARSCNView, context: Context) {
         // Here we update the scene based on path data
-        context.coordinator.updatePathNodes(path: path, targetIndex: targetNodeIndex, mode: mode, worldOffset: navManager.worldOffset)
+        context.coordinator.updatePathNodes(path: path, targetIndex: targetNodeIndex, mode: mode)
     }
     
     func makeCoordinator() -> Coordinator {
@@ -53,17 +53,15 @@ struct ARViewContainer: UIViewRepresentable {
         var currentPath: [PathNode] = []
         var currentTargetIndex: Int = 0
         var currentMode: NavigationManager.SessionMode = .idle
-        var currentWorldOffset: simd_float4x4 = matrix_identity_float4x4
         
         @MainActor
-        func updatePathNodes(path: [PathNode], targetIndex: Int, mode: NavigationManager.SessionMode, worldOffset: simd_float4x4) {
+        func updatePathNodes(path: [PathNode], targetIndex: Int, mode: NavigationManager.SessionMode) {
             guard let arView = arView else { return }
             
             // Update local state for renderer
             self.currentPath = path
             self.currentTargetIndex = targetIndex
             self.currentMode = mode
-            self.currentWorldOffset = worldOffset
             
             // Render new nodes
             // Note: ARSCNView.scene is MainActor isolated.
@@ -78,7 +76,7 @@ struct ARViewContainer: UIViewRepresentable {
                      // Apply World Offset to the original node transform
                      // storedTransform is in "Map Space".
                      // currentWorldOffset transforms "Map Space" to "Current AR Space".
-                     let correctedTransform = worldOffset * nodeData.transform
+                     let correctedTransform = nodeData.transform
                      node.simdTransform = correctedTransform
                      
                     updateNodeAppearance(node, index: index, targetIndex: targetIndex, mode: mode)
@@ -214,7 +212,7 @@ struct ARViewContainer: UIViewRepresentable {
             let targetNode = path[targetIndex]
             // APPLY WORLD OFFSET TO TARGET NODE POSITION FOR ARROW
             // We use the passed-in currentWorldOffset which is updated in updatePathNodes
-            let targetTransform = currentWorldOffset * targetNode.transform
+            let targetTransform = targetNode.transform
             let targetPos = SCNVector3(targetTransform.columns.3.x, targetTransform.columns.3.y, targetTransform.columns.3.z)
             
             let currentPos = pointOfView.position

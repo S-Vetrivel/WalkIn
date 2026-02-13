@@ -10,7 +10,9 @@ class MapStorageService: @unchecked Sendable {
     }
     
     private var fileURL: URL {
-        documentsDirectory.appendingPathComponent(fileName)
+        let url = documentsDirectory.appendingPathComponent(fileName)
+        print("📁 MapStorageService File URL: \(url.path)")
+        return url
     }
     
     // MARK: - Save

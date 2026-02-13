@@ -146,20 +146,7 @@ struct RecordingView: View {
                             }
                             Spacer()
                             
-                            // Alignment Badge
-                            if nav.alignmentScore > 0.6 {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                    Text("Synced")
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.green)
-                                }
-                                .padding(8)
-                                .background(Color.black.opacity(0.6))
-                                .cornerRadius(16)
-                            }
+                            // Alignment Badge (Removed)
                         }
                         .padding()
                         .background(Color.black.opacity(0.7))
@@ -222,57 +209,13 @@ struct RecordingView: View {
                             .foregroundColor(.white)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            .background(nav.alignmentScore > 0.6 ? Color.green.opacity(0.8) : Color.black.opacity(0.6))
+                            .background(Color.black.opacity(0.6))
                             .cornerRadius(20)
                         Spacer()
                     }
                     .padding(.top, 110) // Below HUD
                     
-                    // NEW: 'MATCH THIS VIEW' GUIDANCE
-                    if nav.alignmentScore < 0.5 && nav.mode != .idle {
-                        VStack(spacing: 8) {
-                            Text("MATCH THIS VIEW")
-                                .font(.caption2)
-                                .fontWeight(.black)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.blue)
-                                .cornerRadius(4)
-                            
-                            if let nodeId = nav.bestMatchNodeId,
-                               let node = nav.path.first(where: { $0.id == nodeId }),
-                               let filename = node.image,
-                               let uiImage = ImageLocalizationService.shared.loadUIImage(filename: filename) {
-                                Image(uiImage: uiImage)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 120, height: 120)
-                                    .cornerRadius(8)
-                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white, lineWidth: 2))
-                                    .shadow(radius: 5)
-                            } else {
-                                // Default icon if no node image yet
-                                Image(systemName: "camera.viewfinder")
-                                    .font(.system(size: 40))
-                                    .foregroundColor(.white)
-                                    .frame(width: 120, height: 120)
-                                    .background(Color.white.opacity(0.1))
-                                    .cornerRadius(8)
-                            }
-                            
-                            Text("Move camera to align with the saved snapshot")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.8))
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal)
-                        }
-                        .padding(.vertical, 12)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(16)
-                        .shadow(radius: 10)
-                        .transition(.scale.combined(with: .opacity))
-                    }
+
                     
                     Spacer()
                 }
@@ -378,84 +321,27 @@ struct RecordingView: View {
                 .transition(.scale)
             }
             
-            // LAYER 4: VISUAL ALIGNMENT UI
+            // LAYER 4: RELOCALIZATION UI
             if nav.mode == .startingNavigation {
                 Color.black.opacity(0.6).ignoresSafeArea()
                 
                 VStack(spacing: 20) {
-                    Text("Visual Alignment")
+                    Text("Relocalizing...")
                         .font(.title)
                         .fontWeight(.bold)
                         .foregroundColor(.white)
                     
-                    Text("Point camera at any recorded node to sync.")
+                    Text("Please scan the area around you.")
                         .foregroundColor(.gray)
                     
-                    // Reference Image (Shows closest match or start)
-                    let displayNode = nav.path.first(where: { $0.id == nav.bestMatchNodeId }) ?? nav.path.first
-                    if let node = displayNode, let imagePath = node.image,
-                       let image = ImageLocalizationService.shared.loadUIImage(filename: imagePath) {
-                        VStack {
-                            Text(nav.bestMatchNodeId != nil ? "Closest Landmark" : "Reference (Start)")
-                                .font(.caption)
-                                .foregroundColor(.white)
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(height: 150)
-                                .cornerRadius(10)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .stroke(Color.white, lineWidth: 2)
-                                )
-                        }
-                    }
-                    
-                    // Match Score Indicator
-                    VStack {
-                        Text("MATCH SCORE")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.8))
-                        
-                        HStack {
-                            ProgressView(value: Double(nav.alignmentScore))
-                                .progressViewStyle(LinearProgressViewStyle(tint: nav.alignmentScore > 0.6 ? .green : .red))
-                                .frame(height: 8)
-                            Text(String(format: "%.0f%%", nav.alignmentScore * 100))
-                                .font(.headline)
-                                .foregroundColor(nav.alignmentScore > 0.6 ? .green : .red)
-                                .frame(width: 50)
-                        }
-                        .padding(.horizontal)
-                    }
-                    
-                    // Controls
-                    Button(action: {
-                        withAnimation {
-                            nav.mode = .navigating // Start!
-                        }
-                    }) {
-                        HStack {
-                            if nav.alignmentScore > 0.6 {
-                                Image(systemName: "checkmark.circle.fill")
-                                Text("START NAVIGATION")
-                            } else {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                Text("FORCE START")
-                            }
-                        }
-                        .font(.headline)
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
                         .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(nav.alignmentScore > 0.6 ? Color.green : Color.orange)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
-                    }
-                    .padding(.top)
                     
-                    Text("Point camera at the start location until score turns green.")
+                    Text(nav.guidanceMessage)
                         .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(.white.opacity(0.8))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
                 }
